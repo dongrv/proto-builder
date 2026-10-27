@@ -47,7 +47,7 @@ cargo run --locked --bin release -- pack --binary target/release/proto-builder.e
 
 本地打包不自动向 GitHub 写入。确认候选版本后，在 `dongrv/proto-builder` 创建与版本一致的 `v1.0.0` Release，将上述原始文件作为附件发布，并填写变更说明。**不要重新格式化 release.json、改变换行或替换同版本附件**，否则签名或哈希会失效。修复必须发布新版本。beta 使用 `1.1.0-beta.1` 等 SemVer，并将 GitHub Release 标记为 prerelease，清单渠道使用 beta。
 
-在线更新验收使用独立用户数据目录及已安装的旧版本：执行 `self-update check`、`self-update apply`，确认新版本可启动，再执行 `self-update rollback` 确认旧版本恢复。首次 1.0.0 没有更早的正式版本，后续首个更新版本发布时需完成这一步线上验收。
+在线更新验收使用独立用户数据目录及已安装的旧版本：执行 `self-update check`、`self-update apply`，确认新版本可启动，再执行 `self-update rollback` 确认旧版本恢复。首次 1.0.0 已使用隔离的本地测试旧版本 `0.0.0-acceptance` 完成官方线上下载、验签、替换和逐字节回退。后续每个正式版本仍应使用上一正式版本回归这一步。
 
 官方 stable 更新发现优先 GitHub API，API 不可用时读取 `/releases/latest/download/release.json` 和签名。可选镜像目录结构：
 

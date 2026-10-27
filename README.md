@@ -133,6 +133,8 @@ cargo test --locked --all-targets
 cargo build --locked --release --bin proto-builder
 ```
 
-测试包含真实内置插件生成、并发一致性、用户修改保护、失败不部署、过时文件清理、事务失败回滚，以及本地 SVN 仓库的限定目录更新和冲突中止。交互界面另经 Windows 终端鼠标操作验证。在线自更新仍需要正式发布资源才能完成线上端到端验收；本地签名、篡改拒绝和原生程序替换可以独立验证。
+测试包含真实内置插件生成、并发一致性、用户修改保护、失败不部署、过时文件清理、事务失败回滚，以及本地 SVN 仓库的限定目录更新和冲突中止。交互界面另经 Windows 终端鼠标操作验证。
+
+[v1.0.0 已正式发布](https://github.com/dongrv/proto-builder/releases/tag/v1.0.0)。2026-10-27 使用隔离的本地测试旧版本 `0.0.0-acceptance`，在未使用 GitHub token 的条件下完成从官方地址发现版本、下载验签、原生替换到 1.0.0，以及逐字节回退并重新启动的端到端验收。后续正式版本仍需使用上一正式版本回归验证。
 
 其他说明：[SVN 日常操作](SVN-WORKFLOW.md)、[旧工具弃用说明](LEGACY-DEPRECATED.md)、[签名与发布](RELEASING.md)、[验收记录](VALIDATION.md)、[第三方许可](THIRD-PARTY-NOTICES.md)。
