@@ -1,0 +1,38 @@
+# Copy to the project root as proto-builder.toml, or use --config FILE.
+config_version = 1
+project_root = "."
+proto_path = "proto"
+server_path = "../../../server/branches/beta"
+calc_path = "../../../cal_center/branches/beta"
+
+assign_id = 0
+activity_ids = []
+machine_ids = []
+excludes = [] # e.g. ["experimental", "draft/**"]
+jobs = 0 # auto: available CPUs minus one, minimum one
+docs = true
+protocol_config = true
+copy_to_calc = true
+lang = "zh-CN" # or en-US; omitted means detect Windows UI language
+timeout_seconds = 120 # per external command
+log_retention = 20
+
+[svn]
+update = true
+update_paths = [] # empty: current project root; e.g. ["proto"]
+executable = "svn" # or absolute svn.exe path
+
+[toolchain]
+mode = "embedded" # external requires each explicit path below
+# [toolchain.paths]
+# protoc = 'D:\Tools\protoc.exe'
+# protoc-gen-go = 'D:\Tools\protoc-gen-go.exe'
+# protoc-gen-go-grpc = 'D:\Tools\protoc-gen-go-grpc.exe'
+# protoc-gen-doc = 'D:\Tools\protoc-gen-doc.exe'
+
+[update]
+enabled = true # background check only; explicit apply performs replacement
+interval_hours = 24
+channel = "stable" # beta includes prereleases
+# proxy = "http://127.0.0.1:7890"
+# mirror = "https://your-explicit-mirror.example/proto-builder"

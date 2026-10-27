@@ -1,0 +1,29 @@
+{
+  "platform": "windows-x86_64",
+  "tools": [
+    {
+      "name": "protoc-gen-doc.exe",
+      "version": "1.5.0",
+      "sha256": "9602b7d8d6028e7e350d7346c7efb53d4a66495b85f68404e0e6c947443fed41",
+      "size": 11507200
+    },
+    {
+      "name": "protoc-gen-go-grpc.exe",
+      "version": "1.2.0",
+      "sha256": "2b65e6e86fd9a6dd3d067acb07107c58c5ef57c4139c3c5e12bad21ea191b5f8",
+      "size": 8374784
+    },
+    {
+      "name": "protoc-gen-go.exe",
+      "version": "1.27.1",
+      "sha256": "f719551c5d7240a67c3cd4fb81d3a70d0cb8521798cb4d852fb31dcba0f6a293",
+      "size": 5398528
+    },
+    {
+      "name": "protoc.exe",
+      "version": "3.15.7",
+      "sha256": "461d8a62adebf0463d2a84d45064d0ee026c443e7418e1043c6113a3db4be66a",
+      "size": 3732480
+    }
+  ]
+}

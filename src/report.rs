@@ -1,0 +1,331 @@
+use crate::util;
+use anyhow::{Context, Result};
+use serde::Serialize;
+use serde_json::Value;
+use std::{
+    fs,
+    io::{self, IsTerminal},
+    path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc, Mutex, OnceLock,
+    },
+    time::Instant,
+};
+
+#[derive(Clone, Debug, Serialize)]
+pub struct Diagnostic {
+    pub file: String,
+    pub line: usize,
+    pub column: Option<usize>,
+    pub message: String,
+}
+#[derive(Debug, Serialize)]
+pub struct Report {
+    pub schema_version: u32,
+    pub tool: &'static str,
+    pub version: &'static str,
+    pub run_id: String,
+    pub command: String,
+    pub status: String,
+    pub exit_code: i32,
+    pub phase: String,
+    pub duration_seconds: f64,
+    pub context: Value,
+    pub result: Value,
+    pub events: Vec<Event>,
+    pub diagnostics: Vec<Diagnostic>,
+    pub error: Option<String>,
+}
+#[derive(Debug, Serialize)]
+pub struct Event {
+    pub elapsed_seconds: f64,
+    pub phase: String,
+    pub level: &'static str,
+    pub message: String,
+}
+#[derive(Clone)]
+pub struct Reporter {
+    report: Arc<Mutex<Report>>,
+    start: Instant,
+    pub json: bool,
+    pub verbose: bool,
+    english: Arc<AtomicBool>,
+    retention: Arc<AtomicUsize>,
+}
+impl Reporter {
+    pub fn new(command: &str, json: bool, verbose: bool, lang: &str) -> Self {
+        Self {
+            report: Arc::new(Mutex::new(Report {
+                schema_version: 1,
+                tool: "proto-builder",
+                version: env!("CARGO_PKG_VERSION"),
+                run_id: util::run_id(),
+                command: command.into(),
+                status: "running".into(),
+                exit_code: 0,
+                phase: "startup".into(),
+                duration_seconds: 0.0,
+                context: Value::Null,
+                result: Value::Null,
+                events: vec![],
+                diagnostics: vec![],
+                error: None,
+            })),
+            start: Instant::now(),
+            json,
+            verbose,
+            english: Arc::new(AtomicBool::new(lang == "en-US")),
+            retention: Arc::new(AtomicUsize::new(20)),
+        }
+    }
+    pub fn text<'a>(&self, zh: &'a str, en: &'a str) -> &'a str {
+        if self.english.load(Ordering::Relaxed) {
+            en
+        } else {
+            zh
+        }
+    }
+    pub fn configure(&self, lang: &str, retention: usize) {
+        self.english.store(lang == "en-US", Ordering::Relaxed);
+        self.retention.store(retention, Ordering::Relaxed);
+    }
+    pub fn emit(&self, phase: &str, level: &'static str, message: impl Into<String>) {
+        let message = redact(&message.into());
+        if !self.json && (level != "debug" || self.verbose) {
+            if io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none() {
+                let color = match level {
+                    "error" => 31,
+                    "warning" => 33,
+                    "debug" => 90,
+                    _ => 32,
+                };
+                eprintln!("\x1b[{color}m{phase:>10}\x1b[0m  {message}");
+            } else {
+                eprintln!("{phase:>10}  {message}");
+            }
+        }
+        let mut report = self.report.lock().unwrap_or_else(|e| e.into_inner());
+        report.phase = phase.into();
+        report.events.push(Event {
+            elapsed_seconds: self.start.elapsed().as_secs_f64(),
+            phase: phase.into(),
+            level,
+            message,
+        });
+    }
+    pub fn info(&self, phase: &str, message: impl Into<String>) {
+        self.emit(phase, "info", message);
+    }
+    pub fn detail(&self, phase: &str, message: impl Into<String>) {
+        self.emit(phase, "debug", message);
+    }
+    pub fn context(&self, value: Value) {
+        self.report
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .context = redact_value(value);
+    }
+    pub fn result(&self, value: Value) {
+        self.report.lock().unwrap_or_else(|e| e.into_inner()).result = redact_value(value);
+    }
+    pub fn finish(&self, outcome: &Result<()>, explicit: Option<&Path>) -> Result<PathBuf> {
+        let dir = util::data_dir()?.join("logs");
+        fs::create_dir_all(&dir)?;
+        let mut report = self.report.lock().unwrap_or_else(|e| e.into_inner());
+        report.duration_seconds = self.start.elapsed().as_secs_f64();
+        report.status = if outcome.is_ok() { "success" } else { "failed" }.into();
+        report.exit_code = exit_code(outcome);
+        if !self.json {
+            eprintln!(
+                "{:>10}  {} | {:.3}s",
+                if outcome.is_ok() {
+                    "finished"
+                } else {
+                    "aborted"
+                },
+                self.text(
+                    if outcome.is_ok() {
+                        "完成"
+                    } else {
+                        "失败，中止执行"
+                    },
+                    if outcome.is_ok() {
+                        "Completed"
+                    } else {
+                        "Failed; aborted"
+                    }
+                ),
+                report.duration_seconds
+            );
+        }
+        if let Err(error) = outcome {
+            let message = redact(&format!("{error:#}"));
+            report.diagnostics = diagnostics(&message);
+            if let Some(proto) = report.context["proto_root"].as_str().map(PathBuf::from) {
+                for diagnostic in &mut report.diagnostics {
+                    if Path::new(&diagnostic.file).is_relative() {
+                        diagnostic.file = proto.join(&diagnostic.file).display().to_string();
+                    }
+                }
+            }
+            report.error = Some(message);
+        }
+        let path = dir.join(format!("{}.json", report.run_id));
+        util::write_json(&path, &*report)?;
+        let log = report
+            .events
+            .iter()
+            .map(|e| {
+                format!(
+                    "{:.3} [{}] [{}] {}\n",
+                    e.elapsed_seconds, e.phase, e.level, e.message
+                )
+            })
+            .collect::<String>();
+        util::atomic_write(
+            &path.with_extension("log"),
+            format!("{log}{}", report.error.as_deref().unwrap_or("")).as_bytes(),
+        )?;
+        if let Some(explicit) = explicit {
+            util::write_json(explicit, &*report)?;
+        }
+        if self.json {
+            println!("{}", serde_json::to_string_pretty(&*report)?);
+        }
+        drop(report);
+        rotate(&dir, self.retention.load(Ordering::Relaxed).max(1))?;
+        Ok(path)
+    }
+}
+pub fn diagnostics(text: &str) -> Vec<Diagnostic> {
+    let re =
+        regex::Regex::new(r"(?m)^(?:\[[A-Z_]+\]\s*)?([^\r\n]*?\.proto):(\d+)(?::(\d+))?:\s*(.*)$")
+            .expect("constant regex");
+    re.captures_iter(text)
+        .filter_map(|c| {
+            Some(Diagnostic {
+                file: c[1].to_owned(),
+                line: c[2].parse().ok()?,
+                column: c.get(3).and_then(|v| v.as_str().parse().ok()),
+                message: c[4].to_owned(),
+            })
+        })
+        .collect()
+}
+fn redact(text: &str) -> String {
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        regex::Regex::new(r"(?i)(https?://)[^/\s:@]+:[^/\s@]+@").expect("constant regex")
+    });
+    re.replace_all(text, "${1}<redacted>@").into_owned()
+}
+fn redact_value(value: Value) -> Value {
+    match value {
+        Value::String(text) => Value::String(redact(&text)),
+        Value::Array(items) => Value::Array(items.into_iter().map(redact_value).collect()),
+        Value::Object(items) => Value::Object(
+            items
+                .into_iter()
+                .map(|(k, v)| {
+                    let hidden = ["password", "token", "secret", "authorization"]
+                        .contains(&k.to_lowercase().as_str());
+                    (
+                        k,
+                        if hidden {
+                            Value::String("<redacted>".into())
+                        } else {
+                            redact_value(v)
+                        },
+                    )
+                })
+                .collect(),
+        ),
+        other => other,
+    }
+}
+pub fn exit_code(outcome: &Result<()>) -> i32 {
+    let Err(error) = outcome else {
+        return 0;
+    };
+    let text = format!("{error:#}");
+    for (marker, code) in [
+        ("E_CANCELLED", 130),
+        ("E_CONFIG", 2),
+        ("E_ARGUMENT", 2),
+        ("E_NO_MATCH", 3),
+        ("E_SVN", 4),
+        ("E_TOOLCHAIN", 5),
+        ("E_INTEGRITY", 6),
+        ("E_SIGNATURE", 6),
+        ("E_TRUST_KEY", 6),
+        ("E_OUTPUT_CONFLICT", 7),
+        ("E_LOCKED", 8),
+        ("E_COMPAT", 9),
+    ] {
+        if text.contains(marker) {
+            return code;
+        }
+    }
+    1
+}
+fn rotate(dir: &Path, keep: usize) -> Result<()> {
+    let mut reports = fs::read_dir(dir)?
+        .collect::<std::io::Result<Vec<_>>>()?
+        .into_iter()
+        .filter(|x| x.path().extension().is_some_and(|x| x == "json"))
+        .collect::<Vec<_>>();
+    reports.sort_by_key(|e| e.file_name());
+    let mut total = reports
+        .iter()
+        .map(|r| {
+            r.metadata().map(|m| m.len()).unwrap_or(0)
+                + fs::metadata(r.path().with_extension("log"))
+                    .map(|m| m.len())
+                    .unwrap_or(0)
+        })
+        .sum::<u64>();
+    let remove = reports.len().saturating_sub(keep);
+    for (index, item) in reports.into_iter().enumerate() {
+        if index >= remove && total <= 100 * 1024 * 1024 {
+            break;
+        }
+        total = total.saturating_sub(
+            item.metadata().map(|m| m.len()).unwrap_or(0)
+                + fs::metadata(item.path().with_extension("log"))
+                    .map(|m| m.len())
+                    .unwrap_or(0),
+        );
+        remove_if_present(&item.path()).context("rotate report")?;
+        let log = item.path().with_extension("log");
+        remove_if_present(&log)?;
+    }
+    Ok(())
+}
+fn remove_if_present(path: &Path) -> std::io::Result<()> {
+    match fs::remove_file(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        result => result,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn diagnostics_accept_windows_drive_and_column() {
+        let d = diagnostics("D:/路径/sample.proto:12:4: invalid field\ncmd/a.proto:2: bad enum\n[E_PROTOCOL] D:/project/proto/a.proto:8: duplicate protocol ID");
+        assert_eq!(d.len(), 3);
+        assert_eq!(d[0].line, 12);
+        assert_eq!(d[0].column, Some(4));
+        assert_eq!(d[2].file, "D:/project/proto/a.proto");
+    }
+    #[test]
+    fn credentials_are_redacted_in_json_values() {
+        let value = redact_value(
+            serde_json::json!({"proxy":"https://alice:password@host:1234","token":"private"}),
+        );
+        assert_eq!(value["proxy"], "https://<redacted>@host:1234");
+        assert_eq!(value["token"], "<redacted>");
+    }
+}
