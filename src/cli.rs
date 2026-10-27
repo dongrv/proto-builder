@@ -99,6 +99,13 @@ pub struct Options {
     pub adopt_existing: bool,
     #[arg(long, global = true, value_name = "N")]
     pub jobs: Option<usize>,
+    #[arg(
+        long,
+        global = true,
+        value_name = "SECONDS",
+        help = "单条命令超时 / Per-command timeout"
+    )]
+    pub timeout_seconds: Option<u64>,
     #[arg(long,global=true,value_parser=["zh-CN","en-US"])]
     pub lang: Option<String>,
     #[arg(
@@ -109,11 +116,7 @@ pub struct Options {
     pub json: bool,
     #[arg(long, global = true, help = "禁止交互 / Never prompt")]
     pub non_interactive: bool,
-    #[arg(
-        long,
-        global = true,
-        help = "打开鼠标/键盘向导 / Open interactive wizard"
-    )]
+    #[arg(long, global = true, help = "打开键盘向导 / Open keyboard wizard")]
     pub interactive: bool,
     #[arg(long, global = true)]
     pub report_json: Option<PathBuf>,
@@ -124,6 +127,17 @@ pub struct Options {
 pub enum Cmd {
     #[command(about = "编译并安全写回 / Generate and deploy")]
     Build,
+    #[command(about = "打开本地网页工作台 / Open the local web interface")]
+    Web {
+        #[arg(
+            long,
+            default_value_t = 0,
+            help = "本地端口（0 自动分配） / Local port (0 = automatic)"
+        )]
+        port: u16,
+        #[arg(long, help = "只启动服务，不自动打开浏览器 / Do not open a browser")]
+        no_open: bool,
+    },
     #[command(about = "只读扫描、筛选与输出计划 / Read-only plan")]
     Plan,
     #[command(about = "检查配置、工具链、SVN 和输出权限 / Diagnose environment")]
@@ -187,6 +201,7 @@ impl Cmd {
     pub fn name(&self) -> &'static str {
         match self {
             Self::Build => "build",
+            Self::Web { .. } => "web",
             Self::Plan => "plan",
             Self::Doctor => "doctor",
             Self::Compat { .. } => "compat",

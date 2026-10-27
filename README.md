@@ -11,7 +11,7 @@
 从 [GitHub Releases](https://github.com/dongrv/proto-builder/releases) 下载发布的 Windows x86_64 EXE。发布文件名包含版本号，下载后直接执行安装：
 
 ```powershell
-.\proto-builder-1.0.0-windows-x86_64.exe install
+.\proto-builder-1.1.0-windows-x86_64.exe install
 ```
 
 默认安装到 `%LOCALAPPDATA%\ProtoBuilder\bin` 并注册用户 PATH；新开终端即可使用。也可直接运行下载的程序，或用 `install --dir D:\DevTools\ProtoBuilder` 自选安装目录。`install --system` 使用 Program Files 和系统 PATH，需要管理员终端。
@@ -24,7 +24,7 @@ proto-builder plan
 proto-builder build
 ```
 
-无参数执行 `proto-builder` 打开交互向导。支持鼠标点击、滚轮、方向键、空格多选、搜索、粘贴和简单输入。先选择项目、活动或机器 ID、排除项和功能开关，再预览或构建。保存配置前显示差异并确认，保留原配置备份。失败后保留当前选择，便于调整重试。
+需要鼠标操作时运行 `proto-builder web`，自动在默认浏览器打开本地工作台。无参数执行 `proto-builder` 打开键盘向导，支持方向键、空格多选、搜索、粘贴和简单输入；终端不捕获鼠标，鼠标移动、点击、滚轮和焦点事件不触发界面重绘。
 
 从其他目录启动时可以指定根目录：
 
@@ -32,7 +32,28 @@ proto-builder build
 proto-builder --repo-root D:\work\go\src\shengyou\docs\branches\beta
 ```
 
-向导会记住最近使用的项目。完整命令行接口与向导共用相同的构建逻辑，向导操作前会打印可复用的 PowerShell 命令。
+网页和向导会记住最近使用的项目。完整命令行、键盘向导和网页共用相同的构建逻辑，操作前提供可复用的 PowerShell 命令。
+
+## 网页工作台
+
+```powershell
+proto-builder web
+proto-builder web --repo-root D:\work\go\src\shengyou\docs\branches\beta
+proto-builder web --port 8779
+proto-builder web --no-open
+```
+
+页面以 Claude Code 官网的炭黑、米白衬线标题和克制的橙色为视觉参考，支持暖白配色及中英文切换。HTML、CSS、JavaScript 全部内置 EXE，无需 Node.js、额外服务、联网资源或前端安装步骤。需要支持现代 JavaScript 的浏览器，推荐 Windows 上的 Edge 或 Chrome。
+
+- 用目录选择器浏览磁盘和文件夹，或直接输入相对、绝对路径；更换项目目录后点击「打开项目」。
+- 活动 ID、机器 ID 从真实协议自动读取，支持搜索、多选，输入数字后按 Enter 可添加；排除项支持目录和 glob。空选、交集、公共依赖等规则与 CLI 相同。
+- 「预览计划」列出实际扫描、筛选和编译范围；「检查环境」验证开发环境；「开始编译」执行 SVN 更新、生成和安全写回。
+- 构建时查看增量日志和阶段、停止当前操作，结束后按新增、修改、删除、未变查看文件，搜索结果或下载完整 JSON 报告。错误保留原文件、行、列，点击文件位置可复制。
+- 设置默认只在当前会话生效。「保存配置」先展示差异，确认后写入项目 TOML 并备份；配置被其他程序修改时拒绝覆盖，需重新预览。
+
+同一网页服务一次只执行一项任务，执行期间锁定参数；停止后可以直接调整重试。刷新页面可恢复当前或最近一次任务。关闭浏览器标签页不会停止构建；点击页面底部「关闭工作台」或在启动终端按 Ctrl+C 才会停止服务及当前任务。
+
+服务只监听 `127.0.0.1`，默认随机空闲端口。启动时生成临时会话凭据，通过终端显示的完整地址进入；API 校验凭据、Host 和 Origin。固定端口不改变这个限制，不提供远程访问或任意静态文件下载。`web` 不与 `--json`、`--interactive`、`--dry-run` 混用；只读操作在页面点击「预览计划」，机器输出使用原 CLI。
 
 ## 常用命令
 
@@ -61,6 +82,7 @@ proto-builder build --force
 # 可复现的机器输出
 proto-builder build --jobs 4 --json --non-interactive
 proto-builder build --verbose --report-json D:\Temp\proto-build.json
+proto-builder build --timeout-seconds 180
 proto-builder version
 proto-builder --help
 ```
@@ -133,7 +155,7 @@ cargo test --locked --all-targets
 cargo build --locked --release --bin proto-builder
 ```
 
-测试包含真实内置插件生成、并发一致性、用户修改保护、失败不部署、过时文件清理、事务失败回滚，以及本地 SVN 仓库的限定目录更新和冲突中止。交互界面另经 Windows 终端鼠标操作验证。
+测试包含真实内置插件生成、并发一致性、用户修改保护、失败不部署、过时文件清理、事务失败回滚，以及本地 SVN 仓库的限定目录更新和冲突中止。网页集成测试覆盖会话保护、配置冲突、只读预览、真实构建、错误行号、取消及恢复；另在浏览器和 Windows 终端进行交互验收。
 
 [v1.0.0 已正式发布](https://github.com/dongrv/proto-builder/releases/tag/v1.0.0)。2026-10-27 使用隔离的本地测试旧版本 `0.0.0-acceptance`，在未使用 GitHub token 的条件下完成从官方地址发现版本、下载验签、原生替换到 1.0.0，以及逐字节回退并重新启动的端到端验收。后续正式版本仍需使用上一正式版本回归验证。
 

@@ -9,6 +9,7 @@ use std::{
 };
 
 pub static CANCELLED: AtomicBool = AtomicBool::new(false);
+pub static SHUTDOWN: AtomicBool = AtomicBool::new(false);
 pub fn check_cancelled() -> Result<()> {
     if CANCELLED.load(Ordering::Relaxed) {
         bail!("[E_CANCELLED] cancelled / 用户中断，已停止启动新任务");

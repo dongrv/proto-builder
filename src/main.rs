@@ -12,6 +12,7 @@ mod transaction;
 mod ui;
 mod update;
 mod util;
+mod web;
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
@@ -25,7 +26,10 @@ use std::{
 
 fn main() {
     let cli = Cli::parse();
-    let _ = ctrlc::set_handler(|| util::CANCELLED.store(true, Ordering::Relaxed));
+    let _ = ctrlc::set_handler(|| {
+        util::SHUTDOWN.store(true, Ordering::Relaxed);
+        util::CANCELLED.store(true, Ordering::Relaxed);
+    });
     let name = cli.command.as_ref().map(Cmd::name).unwrap_or("interactive");
     let language = cli.options.lang.as_deref().unwrap_or("zh-CN");
     let reporter = Reporter::new(name, cli.options.json, cli.options.verbose, language);
@@ -140,32 +144,36 @@ fn execute(cli: &Cli, report: &Reporter) -> Result<()> {
         _ => {}
     }
     let mut loaded = config::load(&cli.options)?;
+    let interactive = cli.options.interactive
+        || (cli.command.is_none() && !cli.options.non_interactive && !cli.options.json);
+    if (interactive || matches!(cli.command, Some(Cmd::Web { .. })))
+        && cli.options.repo_root.is_none()
+        && cli.options.config.is_none()
+        && !loaded.settings.proto(&loaded.root).is_dir()
+    {
+        if let Ok(bytes) = fs::read(util::data_dir()?.join("recent-project.json")) {
+            if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                if let Some(root) = value["root"]
+                    .as_str()
+                    .filter(|p| std::path::Path::new(p).is_dir())
+                {
+                    let mut options = cli.options.clone();
+                    options.repo_root = Some(root.into());
+                    loaded = config::load(&options)?;
+                }
+            }
+        }
+    }
     report.configure(&loaded.settings.lang, loaded.settings.log_retention);
     report.context(
         serde_json::json!({"project_root":loaded.root,"configuration_sources":loaded.sources}),
     );
-    let interactive = cli.options.interactive
-        || (cli.command.is_none() && !cli.options.non_interactive && !cli.options.json);
+    if let Some(Cmd::Web { port, no_open }) = &cli.command {
+        return web::run(loaded, &cli.options, *port, !*no_open, report);
+    }
     if interactive {
         if cli.options.non_interactive || cli.options.json {
             bail!("[E_ARGUMENT] --interactive cannot be combined with --non-interactive or --json");
-        }
-        if cli.options.repo_root.is_none()
-            && cli.options.config.is_none()
-            && !loaded.settings.proto(&loaded.root).is_dir()
-        {
-            if let Ok(bytes) = fs::read(util::data_dir()?.join("recent-project.json")) {
-                if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) {
-                    if let Some(root) = value["root"]
-                        .as_str()
-                        .filter(|p| std::path::Path::new(p).is_dir())
-                    {
-                        let mut options = cli.options.clone();
-                        options.repo_root = Some(root.into());
-                        loaded = config::load(&options)?;
-                    }
-                }
-            }
         }
         let mut previous_error = None;
         let mut build_options = cli.options.clone();

@@ -6,7 +6,7 @@ use crate::{
 use anyhow::{bail, Result};
 use crossterm::{
     cursor,
-    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind},
+    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     execute, queue,
     style::{Attribute, Print, SetAttribute},
     terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
@@ -27,7 +27,7 @@ impl Terminal {
         }
         let _ = execute!(
             io::stdout(),
-            event::EnableMouseCapture,
+            event::DisableMouseCapture,
             event::EnableBracketedPaste
         );
         Ok(Self)
@@ -106,8 +106,8 @@ pub fn wizard(
             1,
             tr(
                 s,
-                "鼠标点击 / ↑↓ 选择 / Enter 编辑或执行 / Esc 退出",
-                "Click / arrows to select / Enter to edit or run / Esc to exit",
+                "↑↓ 选择 / Enter 编辑或执行 / Esc 退出 / 网页操作：proto-builder web",
+                "Arrows to select / Enter to edit or run / Esc to exit / Browser: proto-builder web",
             ),
             false,
         )?;
@@ -226,7 +226,7 @@ pub fn wizard(
             row(footer + 2, &notice.replace(['\r', '\n'], " "), false)?;
         }
         io::stdout().flush()?;
-        let activate = match event::read()? {
+        let activate = match read_event()? {
             Event::Key(key) if key.kind != KeyEventKind::Release => match key.code {
                 KeyCode::Esc => return Ok(Action::Cancel),
                 KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -241,24 +241,6 @@ pub fn wizard(
                     false
                 }
                 KeyCode::Enter => true,
-                _ => false,
-            },
-            Event::Mouse(mouse) => match mouse.kind {
-                MouseEventKind::Down(MouseButton::Left)
-                    if mouse.row >= 3
-                        && (mouse.row as usize) < available.min(values.len() - offset) + 3 =>
-                {
-                    selected = offset + mouse.row as usize - 3;
-                    true
-                }
-                MouseEventKind::ScrollDown => {
-                    selected = (selected + 1).min(values.len() - 1);
-                    false
-                }
-                MouseEventKind::ScrollUp => {
-                    selected = selected.saturating_sub(1);
-                    false
-                }
                 _ => false,
             },
             _ => false,
@@ -519,7 +501,7 @@ fn input(title: &str, initial: &str) -> Result<Option<String>> {
         row(3, &text, false)?;
         row(5, "Enter: confirm | Esc: cancel | Ctrl+U: clear", false)?;
         io::stdout().flush()?;
-        match event::read()? {
+        match read_event()? {
             Event::Key(key) if key.kind != KeyEventKind::Release => match key.code {
                 KeyCode::Esc => return Ok(None),
                 KeyCode::Enter => return Ok(Some(text)),
@@ -559,7 +541,7 @@ fn multi(title: &str, options: &[String], initial: &[String]) -> Result<Option<V
         row(1, &format!("Search / 搜索: {query}"), false)?;
         row(
             2,
-            "↑↓ / mouse: select | Space / click: toggle | Enter: confirm | Esc: cancel",
+            "↑↓: select | Space: toggle | Enter: confirm | Esc: cancel",
             false,
         )?;
         for (index, value) in filtered.iter().enumerate().skip(offset).take(available) {
@@ -582,7 +564,7 @@ fn multi(title: &str, options: &[String], initial: &[String]) -> Result<Option<V
             false,
         )?;
         io::stdout().flush()?;
-        let toggle = match event::read()? {
+        let toggle = match read_event()? {
             Event::Key(key) if key.kind != KeyEventKind::Release => match key.code {
                 KeyCode::Esc => return Ok(None),
                 KeyCode::Enter => return Ok(Some(marked.into_iter().collect())),
@@ -625,24 +607,6 @@ fn multi(title: &str, options: &[String], initial: &[String]) -> Result<Option<V
                 }
                 _ => false,
             },
-            Event::Mouse(mouse) => match mouse.kind {
-                MouseEventKind::Down(MouseButton::Left)
-                    if mouse.row >= 4 && (mouse.row as usize) < 4 + available =>
-                {
-                    cursor =
-                        (offset + mouse.row as usize - 4).min(filtered.len().saturating_sub(1));
-                    true
-                }
-                MouseEventKind::ScrollDown => {
-                    cursor = (cursor + 1).min(filtered.len().saturating_sub(1));
-                    false
-                }
-                MouseEventKind::ScrollUp => {
-                    cursor = cursor.saturating_sub(1);
-                    false
-                }
-                _ => false,
-            },
             _ => false,
         };
         if toggle {
@@ -667,11 +631,11 @@ fn review(text: &str) -> Result<bool> {
         }
         row(
             h.saturating_sub(2),
-            "Y: save (backup existing) | N / Esc: cancel | ↑↓ / wheel: scroll",
+            "Y: save (backup existing) | N / Esc: cancel | ↑↓: scroll",
             false,
         )?;
         io::stdout().flush()?;
-        match event::read()? {
+        match read_event()? {
             Event::Key(key) if key.kind != KeyEventKind::Release => match key.code {
                 KeyCode::Char('y' | 'Y') => return Ok(true),
                 KeyCode::Esc | KeyCode::Char('n' | 'N') => return Ok(false),
@@ -679,14 +643,16 @@ fn review(text: &str) -> Result<bool> {
                 KeyCode::Up => offset = offset.saturating_sub(1),
                 _ => {}
             },
-            Event::Mouse(mouse) => match mouse.kind {
-                MouseEventKind::ScrollDown => {
-                    offset = (offset + 1).min(lines.len().saturating_sub(size))
-                }
-                MouseEventKind::ScrollUp => offset = offset.saturating_sub(1),
-                _ => {}
-            },
             _ => {}
+        }
+    }
+}
+fn read_event() -> Result<Event> {
+    loop {
+        match event::read()? {
+            Event::Mouse(_) | Event::FocusGained | Event::FocusLost => continue,
+            Event::Key(key) if key.kind == KeyEventKind::Release => continue,
+            event => return Ok(event),
         }
     }
 }
@@ -714,7 +680,7 @@ pub fn equivalent(loaded: &Loaded, command: &str, options: &Options) -> String {
     ] {
         args.push(format!("{flag}={}", quote(&values.join(","))));
     }
-    args.push(format!("--assign-id {} --jobs {} --lang {} --docs={} --protocol-config={} --copy-to-calc={} --svn-update={}",s.assign_id,s.jobs,s.lang,s.docs,s.protocol_config,s.copy_to_calc,s.svn.update));
+    args.push(format!("--assign-id {} --jobs {} --timeout-seconds {} --lang {} --docs={} --protocol-config={} --copy-to-calc={} --svn-update={}",s.assign_id,s.jobs,s.timeout_seconds,s.lang,s.docs,s.protocol_config,s.copy_to_calc,s.svn.update));
     if options.adopt_existing {
         args.push("--adopt-existing".into());
     }

@@ -120,7 +120,7 @@ impl Default for Update {
         }
     }
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Loaded {
     pub settings: Settings,
     pub root: PathBuf,
@@ -225,6 +225,9 @@ pub fn load_from(options: &Options, cwd: &Path, user: Option<&Path>) -> Result<L
     }
     if let Some(v) = options.jobs {
         settings.jobs = v;
+    }
+    if let Some(v) = options.timeout_seconds {
+        settings.timeout_seconds = v;
     }
     if let Some(v) = &options.lang {
         settings.lang = v.clone();
@@ -388,11 +391,13 @@ mod tests {
         let opts = Options {
             config: Some(root.join("custom.toml")),
             proto_path: Some("proto".into()),
+            timeout_seconds: Some(180),
             ..Default::default()
         };
         let loaded = load_from(&opts, root, None).unwrap();
         assert_eq!(loaded.settings.proto_path, PathBuf::from("proto"));
         assert!(!loaded.settings.svn.update);
+        assert_eq!(loaded.settings.timeout_seconds, 180);
         assert_eq!(loaded.root, root);
     }
     #[test]

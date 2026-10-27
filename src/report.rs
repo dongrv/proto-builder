@@ -50,6 +50,7 @@ pub struct Reporter {
     start: Instant,
     pub json: bool,
     pub verbose: bool,
+    print_json: bool,
     english: Arc<AtomicBool>,
     retention: Arc<AtomicUsize>,
 }
@@ -75,9 +76,29 @@ impl Reporter {
             start: Instant::now(),
             json,
             verbose,
+            print_json: json,
             english: Arc::new(AtomicBool::new(lang == "en-US")),
             retention: Arc::new(AtomicUsize::new(20)),
         }
+    }
+    pub fn for_web(command: &str, lang: &str, retention: usize) -> Self {
+        let mut report = Self::new(command, true, false, lang);
+        report.print_json = false;
+        report.configure(lang, retention);
+        report
+    }
+    pub fn snapshot(&self, after: usize) -> Result<Value> {
+        let report = self.report.lock().unwrap_or_else(|e| e.into_inner());
+        let count = report.events.len();
+        // Serialize only new events: polling must not repeatedly copy the complete log.
+        Ok(serde_json::json!({
+            "schema_version":report.schema_version,"tool":report.tool,"version":report.version,
+            "run_id":report.run_id,"command":report.command,"status":report.status,
+            "exit_code":report.exit_code,"phase":report.phase,
+            "duration_seconds":if report.status == "running" {self.start.elapsed().as_secs_f64()} else {report.duration_seconds},
+            "context":report.context,"result":report.result,"error":report.error,
+            "diagnostics":report.diagnostics,"events":&report.events[after.min(count)..],"event_count":count
+        }))
     }
     pub fn text<'a>(&self, zh: &'a str, en: &'a str) -> &'a str {
         if self.english.load(Ordering::Relaxed) {
@@ -131,7 +152,6 @@ impl Reporter {
     }
     pub fn finish(&self, outcome: &Result<()>, explicit: Option<&Path>) -> Result<PathBuf> {
         let dir = util::data_dir()?.join("logs");
-        fs::create_dir_all(&dir)?;
         let mut report = self.report.lock().unwrap_or_else(|e| e.into_inner());
         report.duration_seconds = self.start.elapsed().as_secs_f64();
         report.status = if outcome.is_ok() { "success" } else { "failed" }.into();
@@ -172,6 +192,7 @@ impl Reporter {
             report.error = Some(message);
         }
         let path = dir.join(format!("{}.json", report.run_id));
+        fs::create_dir_all(&dir)?;
         util::write_json(&path, &*report)?;
         let log = report
             .events
@@ -190,7 +211,7 @@ impl Reporter {
         if let Some(explicit) = explicit {
             util::write_json(explicit, &*report)?;
         }
-        if self.json {
+        if self.json && self.print_json {
             println!("{}", serde_json::to_string_pretty(&*report)?);
         }
         drop(report);

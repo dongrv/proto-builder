@@ -1,0 +1,617 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="description" content="Proto Builder 本地协议构建工作台" />
+    <title>Proto Builder · 协议构建工作台</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip" href="#workspace" data-i18n>跳到工作台</a>
+    <header class="site-header wrap">
+      <a class="brand" href="/" aria-label="Proto Builder">
+        <svg
+          class="brand-icon"
+          viewBox="0 0 32 32"
+          fill="none"
+          aria-hidden="true"
+        >
+          <path
+            d="M11 5H5v22h6M21 5h6v22h-6M13 11l5 5-5 5"
+            stroke="currentColor"
+            stroke-width="2.5"
+            stroke-linecap="square"
+            stroke-linejoin="miter"
+          />
+        </svg>
+        <span>Proto Builder<span class="version" id="version">…</span></span>
+      </a>
+      <nav aria-label="主导航">
+        <span class="nav-current" data-i18n>工作台</span>
+        <a
+          href="https://github.com/dongrv/proto-builder#readme"
+          target="_blank"
+          rel="noopener noreferrer"
+          ><span data-i18n>使用说明</span> <span aria-hidden="true">↗</span></a
+        >
+      </nav>
+      <div class="header-tools">
+        <span class="connection"
+          ><span class="status-dot"></span
+          ><span id="connection" data-i18n>正在连接</span></span
+        ><button class="theme-button" id="theme" type="button" title="切换配色">
+          <span class="theme-symbol" aria-hidden="true">◐</span
+          ><span id="theme-label" data-i18n>暖白模式</span>
+        </button>
+      </div>
+    </header>
+    <main class="wrap" id="workspace">
+      <section class="intro" aria-labelledby="page-title">
+        <div>
+          <p class="eyebrow">PROTOBUF <span>→</span> GO</p>
+          <h1 id="page-title" data-i18n>协议构建，从容有序。</h1>
+          <p class="intro-copy" data-i18n>
+            选好协议，预览计划，一次完成编译与同步。
+          </p>
+        </div>
+        <div class="project-note">
+          <span class="note-label" data-i18n>当前项目</span
+          ><strong id="project-name">—</strong
+          ><span id="catalog-summary" data-i18n>正在读取项目</span>
+        </div>
+      </section>
+      <div id="notice" class="notice" role="alert" hidden></div>
+      <div class="workspace-grid">
+        <section class="configuration" aria-labelledby="configuration-title">
+          <form id="settings-form">
+            <fieldset id="settings-fields" disabled>
+              <section class="form-section">
+                <div class="section-heading">
+                  <h2 id="configuration-title">
+                    <span class="section-number">01</span
+                    ><span data-i18n>项目与路径</span>
+                  </h2>
+                  <button
+                    class="text-button"
+                    id="save-config"
+                    type="button"
+                    data-i18n
+                  >
+                    保存配置
+                  </button>
+                </div>
+                <label for="root" data-i18n>项目目录</label>
+                <div class="input-row project-input">
+                  <input
+                    id="root"
+                    autocomplete="off"
+                    spellcheck="false"
+                    placeholder="D:\work\project"
+                  /><button
+                    type="button"
+                    class="browse"
+                    data-browse="root"
+                    aria-label="选择项目目录"
+                    title="选择项目目录"
+                  >
+                    …</button
+                  ><button
+                    id="open-project"
+                    type="button"
+                    class="button small"
+                    data-i18n
+                  >
+                    打开项目
+                  </button>
+                </div>
+                <div class="path-fields">
+                  <div>
+                    <label for="proto-path" data-i18n>协议目录</label>
+                    <div class="input-row">
+                      <input
+                        id="proto-path"
+                        spellcheck="false"
+                        autocomplete="off"
+                      /><button
+                        type="button"
+                        class="browse"
+                        data-browse="proto-path"
+                        aria-label="选择协议目录"
+                        title="选择协议目录"
+                      >
+                        …
+                      </button>
+                    </div>
+                  </div>
+                  <div>
+                    <label for="server-path" data-i18n>业务服目录</label>
+                    <div class="input-row">
+                      <input
+                        id="server-path"
+                        spellcheck="false"
+                        autocomplete="off"
+                      /><button
+                        type="button"
+                        class="browse"
+                        data-browse="server-path"
+                        aria-label="选择业务服目录"
+                        title="选择业务服目录"
+                      >
+                        …
+                      </button>
+                    </div>
+                  </div>
+                  <div>
+                    <label for="calc-path" data-i18n>计算服目录</label>
+                    <div class="input-row">
+                      <input
+                        id="calc-path"
+                        spellcheck="false"
+                        autocomplete="off"
+                      /><button
+                        type="button"
+                        class="browse"
+                        data-browse="calc-path"
+                        aria-label="选择计算服目录"
+                        title="选择计算服目录"
+                      >
+                        …
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <p class="field-note" data-i18n>
+                  相对路径以项目目录为起点。设置默认仅对本次生效。
+                </p>
+              </section>
+              <section class="form-section">
+                <div class="section-heading">
+                  <h2>
+                    <span class="section-number">02</span
+                    ><span data-i18n>选择协议</span>
+                  </h2>
+                  <button
+                    type="button"
+                    class="text-button"
+                    id="clear-filters"
+                    data-i18n
+                  >
+                    重置筛选
+                  </button>
+                </div>
+                <div class="selection-columns">
+                  <section class="picker" aria-labelledby="activities-label">
+                    <div class="picker-title">
+                      <h3 id="activities-label" data-i18n>活动 ID</h3>
+                      <span id="activity-count" data-i18n>全部</span>
+                    </div>
+                    <input
+                      class="search"
+                      id="activity-search"
+                      type="search"
+                      aria-label="搜索活动 ID"
+                      placeholder="搜索或输入 ID"
+                    />
+                    <div id="activity-options" class="choice-list"></div>
+                  </section>
+                  <section class="picker" aria-labelledby="machines-label">
+                    <div class="picker-title">
+                      <h3 id="machines-label" data-i18n>机器 ID</h3>
+                      <span id="machine-count" data-i18n>全部</span>
+                    </div>
+                    <input
+                      class="search"
+                      id="machine-search"
+                      type="search"
+                      aria-label="搜索机器 ID"
+                      placeholder="搜索或输入 ID"
+                    />
+                    <div id="machine-options" class="choice-list"></div>
+                  </section>
+                </div>
+                <p class="field-note" data-i18n>
+                  空选表示全部；公共协议始终保留。活动与机器同时选择时取交集。
+                </p>
+                <details class="fold">
+                  <summary>
+                    <span data-i18n>排除目录</span
+                    ><span id="exclude-count" class="muted">0</span>
+                  </summary>
+                  <div class="input-row">
+                    <input
+                      id="exclude-search"
+                      type="search"
+                      aria-label="搜索或输入排除规则"
+                      placeholder="搜索目录，或输入 glob 后按 Enter"
+                    /><button
+                      class="browse add"
+                      id="add-exclude"
+                      type="button"
+                      aria-label="添加排除规则"
+                    >
+                      +
+                    </button>
+                  </div>
+                  <div
+                    id="exclude-options"
+                    class="choice-list directory-choices"
+                  ></div>
+                </details>
+              </section>
+              <section class="form-section options-section">
+                <h2>
+                  <span class="section-number">03</span
+                  ><span data-i18n>构建选项</span>
+                </h2>
+                <div class="toggle-grid">
+                  <label class="toggle"
+                    ><input id="svn-update" type="checkbox" /><span
+                      class="switch"
+                      aria-hidden="true"
+                    ></span
+                    ><span data-i18n>编译前更新 SVN</span></label
+                  >
+                  <label class="toggle"
+                    ><input id="copy-to-calc" type="checkbox" /><span
+                      class="switch"
+                      aria-hidden="true"
+                    ></span
+                    ><span data-i18n>同步计算服</span></label
+                  >
+                  <label class="toggle"
+                    ><input id="docs" type="checkbox" /><span
+                      class="switch"
+                      aria-hidden="true"
+                    ></span
+                    ><span data-i18n>生成协议文档</span></label
+                  >
+                  <label class="toggle"
+                    ><input id="protocol-config" type="checkbox" /><span
+                      class="switch"
+                      aria-hidden="true"
+                    ></span
+                    ><span data-i18n>生成协议号配置</span></label
+                  >
+                </div>
+                <details class="fold advanced">
+                  <summary data-i18n>更多选项</summary>
+                  <div class="advanced-grid">
+                    <div>
+                      <label for="jobs" data-i18n>并行数 · 0 为自动</label
+                      ><input
+                        id="jobs"
+                        type="number"
+                        min="0"
+                        max="256"
+                        step="1"
+                      />
+                    </div>
+                    <div>
+                      <label for="assign-id" data-i18n
+                        >旧 ID 规则 · 0 为全部</label
+                      ><input id="assign-id" type="number" min="0" step="1" />
+                    </div>
+                    <div>
+                      <label for="timeout" data-i18n>单条命令超时 / 秒</label
+                      ><input id="timeout" type="number" min="1" step="1" />
+                    </div>
+                    <div>
+                      <label for="lang" data-i18n>界面与报告语言</label
+                      ><select id="lang">
+                        <option value="zh-CN">简体中文</option>
+                        <option value="en-US">English</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div class="sensitive-options">
+                    <label class="check-line"
+                      ><input type="checkbox" id="adopt-existing" /><span
+                        data-i18n
+                        >接管已有生成物，覆盖前备份</span
+                      ></label
+                    ><label class="check-line"
+                      ><input type="checkbox" id="force" /><span data-i18n
+                        >覆盖已手动修改的生成物，覆盖前备份</span
+                      ></label
+                    >
+                  </div>
+                </details>
+              </section>
+            </fieldset>
+          </form>
+          <div class="action-bar">
+            <button type="button" class="button secondary" id="plan" disabled>
+              <span aria-hidden="true">⌕</span
+              ><span data-i18n>预览计划</span></button
+            ><button type="button" class="button primary" id="build" disabled>
+              <span data-i18n>开始编译</span
+              ><span aria-hidden="true">↗</span></button
+            ><button
+              type="button"
+              class="text-button doctor"
+              id="doctor"
+              disabled
+              data-i18n
+            >
+              检查环境
+            </button>
+          </div>
+        </section>
+        <section class="output-panel" aria-labelledby="output-title">
+          <div class="output-heading">
+            <h2 id="output-title" data-i18n>构建视图</h2>
+            <span class="run-state" id="run-state"
+              ><span class="status-dot"></span
+              ><span id="status-text" data-i18n>准备就绪</span></span
+            >
+          </div>
+          <div class="output-tabs" role="tablist" aria-label="构建信息">
+            <button
+              type="button"
+              id="result-tab"
+              role="tab"
+              aria-selected="true"
+              aria-controls="result-view"
+              data-i18n
+            >
+              计划与结果</button
+            ><button
+              type="button"
+              id="log-tab"
+              role="tab"
+              aria-selected="false"
+              aria-controls="log-view"
+            >
+              <span data-i18n>运行日志</span
+              ><span id="log-count" class="tab-count">0</span></button
+            ><span class="elapsed" id="elapsed"></span>
+          </div>
+          <div class="run-progress" id="run-progress" hidden>
+            <div>
+              <span id="phase-text"></span
+              ><button
+                type="button"
+                class="text-button cancel"
+                id="cancel"
+                data-i18n
+              >
+                停止操作
+              </button>
+            </div>
+            <progress id="progress" aria-label="构建进度"></progress>
+          </div>
+          <div id="error-box" class="error-box" hidden>
+            <h3 id="error-title" data-i18n>本次操作已中止</h3>
+            <pre id="error-message"></pre>
+            <div id="diagnostics"></div>
+          </div>
+          <section
+            class="result-view"
+            id="result-view"
+            role="tabpanel"
+            aria-labelledby="result-tab"
+          >
+            <div class="empty-state" id="empty-state">
+              <div class="protocol-mark" aria-hidden="true">
+                <span>{ }</span><span class="flow-line">⟶</span><span>Go</span>
+              </div>
+              <h3 data-i18n>先看清计划，再放心构建。</h3>
+              <p data-i18n>
+                从左侧选择协议，点击「预览计划」，查看即将编译的目录和文件。
+              </p>
+              <div class="empty-note">
+                <span class="note-line"></span
+                ><span data-i18n>预览不会更新 SVN 或写入生成文件</span>
+              </div>
+            </div>
+            <div id="result-content" hidden>
+              <div id="metrics" class="metrics"></div>
+              <p id="result-note" class="result-note"></p>
+              <div class="result-filter">
+                <input
+                  id="result-search"
+                  type="search"
+                  aria-label="搜索结果"
+                  placeholder="搜索目录或文件"
+                /><label class="check-line" id="unchanged-label" hidden
+                  ><input type="checkbox" id="show-unchanged" /><span data-i18n
+                    >显示未变文件</span
+                  ></label
+                >
+              </div>
+              <div id="result-list" class="result-list"></div>
+              <button
+                id="more-results"
+                type="button"
+                class="text-button more-results"
+                hidden
+                data-i18n
+              >
+                显示更多
+              </button>
+            </div>
+          </section>
+          <section
+            id="log-view"
+            class="log-view"
+            role="tabpanel"
+            aria-labelledby="log-tab"
+            hidden
+          >
+            <div class="log-toolbar">
+              <span data-i18n>本次操作的实时记录</span
+              ><label class="check-line"
+                ><input id="debug-logs" type="checkbox" /><span data-i18n
+                  >详细日志</span
+                ></label
+              >
+            </div>
+            <div
+              id="logs"
+              class="logs"
+              role="log"
+              aria-live="polite"
+              aria-relevant="additions"
+            >
+              <p class="muted" id="logs-placeholder" data-i18n>
+                操作开始后，日志会显示在这里。
+              </p>
+            </div>
+          </section>
+          <div class="output-footer">
+            <details id="command-details">
+              <summary data-i18n>等价命令</summary>
+              <pre id="command-text"></pre>
+              <button
+                id="copy-command"
+                class="text-button"
+                type="button"
+                data-i18n
+              >
+                复制命令
+              </button>
+            </details>
+            <button
+              class="text-button"
+              id="download-report"
+              type="button"
+              hidden
+              data-i18n
+            >
+              下载完整报告 ↗
+            </button>
+          </div>
+        </section>
+      </div>
+      <footer class="site-footer">
+        <span
+          >Proto Builder <span class="footer-divider">/</span>
+          <span data-i18n>本地执行，结果可查。</span></span
+        ><button type="button" class="text-button" id="shutdown" data-i18n>
+          关闭工作台
+        </button>
+      </footer>
+    </main>
+    <dialog
+      id="folder-dialog"
+      class="dialog folder-dialog"
+      aria-labelledby="folder-title"
+    >
+      <div class="dialog-heading">
+        <h2 id="folder-title" data-i18n>选择目录</h2>
+        <button
+          type="button"
+          class="close-dialog"
+          data-close="folder-dialog"
+          aria-label="关闭"
+        >
+          ×
+        </button>
+      </div>
+      <div class="folder-location">
+        <button
+          class="button secondary small"
+          type="button"
+          id="folder-up"
+          aria-label="上一级"
+        >
+          ↑</button
+        ><select id="folder-drive" aria-label="磁盘"></select
+        ><input
+          id="folder-path"
+          aria-label="目录路径"
+          spellcheck="false"
+        /><button class="button small" type="button" id="folder-go" data-i18n>
+          前往
+        </button>
+      </div>
+      <input
+        id="folder-filter"
+        type="search"
+        aria-label="筛选文件夹"
+        placeholder="筛选当前目录中的文件夹"
+      />
+      <div class="folder-list" id="folder-list"></div>
+      <p class="field-note" id="folder-count"></p>
+      <div class="dialog-actions">
+        <button
+          class="button secondary"
+          type="button"
+          data-close="folder-dialog"
+          data-i18n
+        >
+          取消</button
+        ><button
+          class="button primary"
+          type="button"
+          id="folder-choose"
+          data-i18n
+        >
+          选择此目录
+        </button>
+      </div>
+    </dialog>
+    <dialog id="save-dialog" class="dialog" aria-labelledby="save-title">
+      <div class="dialog-heading">
+        <h2 id="save-title" data-i18n>保存项目配置</h2>
+        <button
+          type="button"
+          class="close-dialog"
+          data-close="save-dialog"
+          aria-label="关闭"
+        >
+          ×
+        </button>
+      </div>
+      <p class="field-note" data-i18n>确认以下变更；已有配置会保留一份备份。</p>
+      <p id="save-path" class="mono"></p>
+      <pre id="config-diff" class="config-diff"></pre>
+      <div class="dialog-actions">
+        <button
+          class="button secondary"
+          type="button"
+          data-close="save-dialog"
+          data-i18n
+        >
+          取消</button
+        ><button
+          class="button primary"
+          type="button"
+          id="confirm-save"
+          data-i18n
+        >
+          确认保存
+        </button>
+      </div>
+    </dialog>
+    <dialog
+      id="shutdown-dialog"
+      class="dialog compact-dialog"
+      aria-labelledby="shutdown-title"
+    >
+      <h2 id="shutdown-title" data-i18n>关闭工作台？</h2>
+      <p data-i18n>正在执行的操作会停止。可随时从终端重新启动网页工作台。</p>
+      <div class="dialog-actions">
+        <button
+          class="button secondary"
+          type="button"
+          data-close="shutdown-dialog"
+          data-i18n
+        >
+          继续使用</button
+        ><button
+          class="button primary"
+          type="button"
+          id="confirm-shutdown"
+          data-i18n
+        >
+          关闭工作台
+        </button>
+      </div>
+    </dialog>
+  </body>
+</html>
