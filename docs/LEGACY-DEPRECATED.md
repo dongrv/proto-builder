@@ -9,7 +9,7 @@
 | 按活动或机器选择 | `proto-builder build --activity-id 7034` / `--machine-id 6034` |
 | 查看计划 | `proto-builder plan` |
 | 检查环境 | `proto-builder doctor` |
-| 设置路径、筛选和开关 | `proto-builder` 交互向导或 TOML |
+| 设置路径、筛选和开关 | `proto-builder web` 网页、`proto-builder` 键盘向导或 TOML |
 | 内部结果对比 | `proto-builder compat --baseline DIR --actual DIR` |
 
 原始脚本不会被新工具调用。内部基准不进入发行包，也不增加日常用户维护负担。

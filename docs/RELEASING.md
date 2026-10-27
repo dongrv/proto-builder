@@ -24,7 +24,7 @@ cargo run --locked --bin release -- keygen --directory D:\Private\new-release-id
 
 ## 构建与打包
 
-从本目录执行，先更新 Cargo.toml 的产品版本、检查 Cargo.lock 和依赖许可，再完成校验：
+从仓库根目录执行，先更新 Cargo.toml 的产品版本、检查 Cargo.lock 和依赖许可，再完成校验：
 
 ```powershell
 cargo fmt --check
@@ -43,7 +43,7 @@ cargo run --locked --bin release -- pack --binary target/release/proto-builder.e
 - `SHA256SUMS`
 - `public-key.hex`：便于人工核对；更新校验只信任程序内置公钥
 
-另外提供 README、配置示例、第三方许可文件便于用户阅读；许可文本也已内置 EXE。打包过程不调用旧协议脚本，内部基准不进入包。
+另外提供 README、配置示例、包含 docs/ 的文档压缩包和带提交标识及 SHA256 的源码快照；完整说明和第三方许可位于 docs/，许可文本也已内置 EXE。打包过程不调用旧协议脚本，内部基准不进入包。
 
 ## 正式发布
 

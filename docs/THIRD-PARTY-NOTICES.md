@@ -1,5 +1,7 @@
 # Third-party notices
 
+All asset paths below are relative to the repository root.
+
 The executable includes the original project's pinned Windows tool binaries. These components remain licensed by their respective authors. Full upstream notices are included in `assets/licenses` and embedded in the executable; run `proto-builder licenses` to display them.
 
 | Component | Version | Upstream source | Notice |
