@@ -359,3 +359,42 @@ fn svn_failure_is_classified_without_disabling_the_configured_update() {
     let (_, shown) = run(root, &["config", "show"], &[]);
     assert_eq!(shown["result"]["settings"]["svn"]["update"], true);
 }
+
+#[cfg(windows)]
+#[test]
+fn long_windows_data_and_skill_paths_support_atomic_replacement() {
+    use std::os::windows::ffi::OsStrExt;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    fixture(root);
+    let mut data = root.join("deep-user-data");
+    while data.as_os_str().encode_wide().count() < 300 {
+        data.push("long-windows-directory-for-agent");
+    }
+    let environment = [("PROTO_BUILDER_HOME", data.display().to_string())];
+    let (output, first) = run(root, &["build"], &environment);
+    assert!(output.status.success(), "{first}");
+    assert_eq!(first["output_state"], "committed");
+    assert_eq!(first["generated_files_changed"], true);
+    let target = root.join("server/protocol/cmd/example.pb.go");
+    let initial = fs::read(&target).unwrap();
+    let (output, repeat) = run(root, &["build"], &environment);
+    assert!(output.status.success(), "{repeat}");
+    assert_eq!(repeat["generated_files_changed"], false);
+    assert_eq!(fs::read(&target).unwrap(), initial);
+    assert_eq!(full(&repeat)["output_state"], "committed");
+
+    let destination = data.join("skills/proto-builder");
+    let args = ["skill", "--output", destination.to_str().unwrap()];
+    let (output, exported) = run(root, &args, &environment);
+    assert!(output.status.success(), "{exported}");
+    let skill = destination.join("SKILL.md");
+    assert_eq!(
+        fs::read(&skill).unwrap(),
+        include_bytes!("../.agents/skills/proto-builder/SKILL.md")
+    );
+    fs::write(&skill, "local customization").unwrap();
+    let (output, blocked) = run(root, &args, &environment);
+    assert_eq!(output.status.code(), Some(2), "{blocked}");
+    assert_eq!(fs::read_to_string(skill).unwrap(), "local customization");
+}

@@ -84,15 +84,19 @@ pub fn resolve(root: &Path, s: &Settings, report: &Reporter) -> Result<Tools> {
             if !path.is_file() {
                 bail!("[E_TOOLCHAIN] {} does not exist", path.display());
             }
+            // Windows process creation also needs a verbatim executable path
+            // when the configured tool/cache directory exceeds MAX_PATH.
+            let executable = fs::canonicalize(&path)
+                .with_context(|| format!("[E_TOOLCHAIN] resolve {}", path.display()))?;
             let version_output = crate::process::run(
-                std::process::Command::new(&path).arg("--version"),
+                std::process::Command::new(&executable).arg("--version"),
                 "toolchain",
                 s.timeout_seconds,
                 report,
             )?;
             let version = format!("{}{}", version_output.stdout, version_output.stderr);
             records.push(serde_json::json!({"name":name,"path":path,"sha256":util::file_hash(&path)?,"version":version.trim()}));
-            paths.insert(name.into(), path);
+            paths.insert(name.into(), executable);
         }
         return Ok(Tools {
             paths,
@@ -139,7 +143,11 @@ pub fn resolve(root: &Path, s: &Settings, report: &Reporter) -> Result<Tools> {
                 format!("extract {} {}", tool.name, tool.version),
             );
         }
-        paths.insert(tool.name.trim_end_matches(".exe").to_owned(), path);
+        paths.insert(
+            tool.name.trim_end_matches(".exe").to_owned(),
+            fs::canonicalize(&path)
+                .with_context(|| format!("[E_TOOLCHAIN] resolve {}", path.display()))?,
+        );
     }
     util::write_json(&base.join("manifest.json"), &spec)?;
     Ok(Tools {

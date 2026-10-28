@@ -19,15 +19,19 @@ pub fn export_skill(
     std::fs::create_dir_all(&output)
         .with_context(|| format!("[E_CONFIG] create {}", output.display()))?;
     let bytes = include_bytes!("../.agents/skills/proto-builder/SKILL.md");
-    let mut staged = tempfile::NamedTempFile::new_in(&output)?;
+    // Keep both paths verbatim for tempfile's native Windows rename operation.
+    let native_output = std::fs::canonicalize(&output)?;
+    let mut staged = tempfile::NamedTempFile::new_in(&native_output)?;
     staged.write_all(bytes)?;
     staged.as_file().sync_all()?;
-    staged.persist_noclobber(&target).with_context(|| {
-        format!(
-            "[E_CONFIG] export {} (existing files are never overwritten)",
-            target.display()
-        )
-    })?;
+    staged
+        .persist_noclobber(native_output.join("SKILL.md"))
+        .with_context(|| {
+            format!(
+                "[E_CONFIG] export {} (existing files are never overwritten)",
+                target.display()
+            )
+        })?;
     report.result(json!({"file":target,"sha256":crate::util::hash(bytes)}));
     report.info("skill", target.display().to_string());
     Ok(())

@@ -76,10 +76,19 @@ pub fn absolute(base: &Path, value: &Path) -> PathBuf {
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     let parent = path.parent().context("file has no parent")?;
     fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
-    let mut temp = tempfile::NamedTempFile::new_in(parent)?;
+    // tempfile's native Windows rename APIs need verbatim paths beyond MAX_PATH.
+    // Resolve only the parent: replacing an existing leaf must remain atomic.
+    let parent = fs::canonicalize(if parent.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        parent
+    })
+    .with_context(|| format!("resolve {}", parent.display()))?;
+    let destination = parent.join(path.file_name().context("file has no name")?);
+    let mut temp = tempfile::NamedTempFile::new_in(&parent)?;
     temp.write_all(bytes)?;
     temp.as_file().sync_all()?;
-    temp.persist(path)
+    temp.persist(&destination)
         .map_err(|e| e.error)
         .with_context(|| format!("replace {}", path.display()))?;
     Ok(())
