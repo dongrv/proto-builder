@@ -219,6 +219,8 @@ pub fn make(root: &Path, s: &Settings) -> Result<Plan> {
         outputs: vec![],
     };
     let mut target_matches = 0;
+    let mut activity_matches = 0;
+    let mut machine_matches = 0;
     for input in all.values() {
         if input.relative.starts_with("google/") || exclude.matches(&input.relative) {
             plan.excluded.push(Skipped {
@@ -243,6 +245,10 @@ pub fn make(root: &Path, s: &Settings) -> Result<Plan> {
                 .machine_id
                 .as_ref()
                 .is_some_and(|id| s.machine_ids.contains(id));
+        if legacy_ok && !shared {
+            activity_matches += usize::from(activity_ok);
+            machine_matches += usize::from(machine_ok);
+        }
         if legacy_ok && (shared || (activity_ok && machine_ok)) {
             if !shared {
                 target_matches += 1;
@@ -264,7 +270,14 @@ pub fn make(root: &Path, s: &Settings) -> Result<Plan> {
         || ((s.assign_id > 0 || !s.activity_ids.is_empty() || !s.machine_ids.is_empty())
             && target_matches == 0)
     {
-        bail!("[E_NO_MATCH] no protobuf matches activity={:?}, machine={:?}, assign_id={}, excludes={:?}",s.activity_ids,s.machine_ids,s.assign_id,s.excludes);
+        let hint = if !s.activity_ids.is_empty() && !s.machine_ids.is_empty() {
+            format!(
+                "\n活动与机器同时选择时取交集（AND）。应用排除项及 assign-id 后，活动条件匹配 {activity_matches} 个文件，机器条件匹配 {machine_matches} 个文件，但没有文件同时满足两个条件。\n仅编译活动时，请清空机器选择（--machine-id=）；仅编译机器时，请清空活动选择（--activity-id=）。如需两类协议，请分别执行。\nActivity and machine filters use AND: activity matches {activity_matches} files, machine matches {machine_matches} files after exclusions and assign-id; intersection is empty. Clear --machine-id= or --activity-id=, or run each selection separately."
+            )
+        } else {
+            String::new()
+        };
+        bail!("[E_NO_MATCH] no protobuf matches activity={:?}, machine={:?}, assign_id={}, excludes={:?}{hint}",s.activity_ids,s.machine_ids,s.assign_id,s.excludes);
     }
     let mut closure = BTreeSet::new();
     fn visit(

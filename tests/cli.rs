@@ -49,6 +49,41 @@ fn tree(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     files
 }
 #[test]
+fn disjoint_activity_machine_filters_explain_existing_ids_and_remedy() {
+    let dir = tempfile::tempdir().unwrap();
+    fixture(dir.path());
+    for folder in ["act7001", "slot5001"] {
+        fs::create_dir_all(dir.path().join("proto").join(folder)).unwrap();
+        fs::write(
+            dir.path().join("proto").join(folder).join("a.proto"),
+            format!("syntax=\"proto3\"; package {folder};"),
+        )
+        .unwrap();
+    }
+    let args = ["plan", "--activity-id", "7001", "--machine-id", "5001"];
+    let out = run(dir.path(), &args);
+    assert_eq!(out.status.code(), Some(3));
+    let value = report(&out);
+    let error = value["error"].as_str().unwrap();
+    assert!(error.contains("E_NO_MATCH"));
+    assert!(error.contains("activity matches 1 files, machine matches 1 files"));
+    assert!(error.contains("intersection is empty"));
+    assert!(error.contains("--machine-id="));
+    let out = run(
+        dir.path(),
+        &["plan", "--activity-id", "7001", "--machine-id="],
+    );
+    assert!(out.status.success());
+    assert!(report(&out)["result"]["selected"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|input| input["relative"] == "act7001/a.proto"));
+    assert!(!dir.path().join("server").exists());
+    assert!(!dir.path().join("calc").exists());
+}
+
+#[test]
 fn plan_is_read_only_even_with_default_svn_update() {
     let dir = tempfile::tempdir().unwrap();
     fixture(dir.path());
