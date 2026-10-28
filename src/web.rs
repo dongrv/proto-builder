@@ -199,6 +199,7 @@ impl State {
         Ok(
             json!({"version":env!("CARGO_PKG_VERSION"),"root":loaded.root,"settings":loaded.settings,
             "sources":loaded.sources,"project_file":loaded.project_file,
+            "setup":crate::setup::status(&loaded)?,
             "force":force,"adopt_existing":adopt_existing,"last_job":last}),
         )
     }

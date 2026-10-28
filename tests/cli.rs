@@ -6,9 +6,17 @@ use std::{
 };
 
 fn run(root: &Path, args: &[&str]) -> Output {
+    run_with_env(root, args, &[])
+}
+fn run_with_env(root: &Path, args: &[&str], environment: &[(&str, String)]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_proto-builder"))
         .current_dir(root)
         .env("PROTO_BUILDER_HOME", root.join("user-data"))
+        .env_remove("ENV_CENTER_PROJECT")
+        .env_remove("ENV_CAL_CENTER_PROJECT")
+        .env_remove("ENV_PROTOBUF")
+        .env_remove("ENV_DEVELOPER_NAME")
+        .envs(environment.iter().map(|(key, value)| (*key, value)))
         .args(args)
         .args(["--json", "--non-interactive"])
         .output()
@@ -158,6 +166,159 @@ fn selective_go_build_preserves_complete_shared_documents() {
             before[index]
         );
     }
+}
+
+#[test]
+fn team_environment_and_successful_setup_persistence() {
+    let dir = tempfile::tempdir().unwrap();
+    let launch = dir.path();
+    let project = launch.join("协议 项目");
+    fixture(&project);
+    let server = project.join("团队业务服");
+    let calc = project.join("团队计算服");
+    fs::create_dir(&server).unwrap();
+    fs::create_dir(&calc).unwrap();
+    let environment = [
+        ("ENV_PROTOBUF", project.display().to_string()),
+        ("ENV_CENTER_PROJECT", server.display().to_string()),
+        ("ENV_CAL_CENTER_PROJECT", calc.display().to_string()),
+        ("ENV_DEVELOPER_NAME", "董荣旺".into()),
+    ];
+    let shown = run_with_env(launch, &["config", "show"], &environment);
+    assert!(shown.status.success(), "{}", report(&shown));
+    let shown = report(&shown);
+    assert_eq!(shown["result"]["project_root"], project.to_str().unwrap());
+    assert_eq!(
+        shown["result"]["settings"]["server_path"],
+        server.to_str().unwrap()
+    );
+    assert_eq!(
+        shown["result"]["settings"]["calc_path"],
+        calc.to_str().unwrap()
+    );
+    assert_eq!(shown["result"]["settings"]["developer_name"], "董荣旺");
+    let overridden = run_with_env(
+        launch,
+        &[
+            "config",
+            "show",
+            "--server-path",
+            "manual",
+            "--developer-name",
+            "手动名字",
+        ],
+        &environment,
+    );
+    assert_eq!(
+        report(&overridden)["result"]["settings"]["server_path"],
+        "manual"
+    );
+    assert_eq!(
+        report(&overridden)["result"]["settings"]["developer_name"],
+        "手动名字"
+    );
+    assert!(run_with_env(launch, &["plan"], &environment)
+        .status
+        .success());
+    let saved = launch.join("user-data/local-setup.json");
+    assert!(!saved.exists());
+    assert!(
+        !run_with_env(launch, &["build", "--activity-id", "99999"], &environment)
+            .status
+            .success()
+    );
+    assert!(!saved.exists());
+    let success = run_with_env(launch, &["build"], &environment);
+    assert!(success.status.success(), "{}", report(&success));
+    assert!(saved.is_file());
+    let resumed = report(&run(launch, &["config", "show"]));
+    assert_eq!(resumed["result"]["project_root"], project.to_str().unwrap());
+    assert_eq!(
+        resumed["result"]["settings"]["server_path"],
+        server.to_str().unwrap()
+    );
+    assert_eq!(resumed["result"]["settings"]["developer_name"], "董荣旺");
+    let plan = run(launch, &["plan"]);
+    assert!(plan.status.success(), "{}", report(&plan));
+    assert!(!report(&plan)["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| e["phase"] == "setup" && e["level"] == "warning"));
+    let new_server = project.join("新的业务服");
+    let invalid = run_with_env(
+        launch,
+        &["plan"],
+        &[("ENV_CENTER_PROJECT", "relative/invalid".into())],
+    );
+    assert!(invalid.status.success());
+    assert!(report(&invalid)["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| e["phase"] == "setup" && e["level"] == "warning"));
+    fs::create_dir(&new_server).unwrap();
+    let mut changed = environment.clone();
+    changed[1].1 = new_server.display().to_string();
+    let changed = run_with_env(launch, &["config", "show"], &changed);
+    assert_eq!(
+        report(&changed)["result"]["settings"]["server_path"],
+        new_server.to_str().unwrap()
+    );
+}
+
+#[test]
+fn remembered_paths_are_scoped_to_each_project() {
+    let dir = tempfile::tempdir().unwrap();
+    let launch = dir.path();
+    for name in ["one", "two"] {
+        let project = launch.join(name);
+        fixture(&project);
+        let result = run(
+            launch,
+            &[
+                "build",
+                "--repo-root",
+                project.to_str().unwrap(),
+                "--server-path",
+                "custom-server",
+                "--calc-path",
+                "custom-calc",
+            ],
+        );
+        assert!(result.status.success(), "{}", report(&result));
+    }
+    let saved: serde_json::Value =
+        serde_json::from_slice(&fs::read(launch.join("user-data/local-setup.json")).unwrap())
+            .unwrap();
+    assert_eq!(saved["projects"].as_object().unwrap().len(), 2);
+    let one = run(
+        launch,
+        &[
+            "config",
+            "show",
+            "--repo-root",
+            launch.join("one").to_str().unwrap(),
+        ],
+    );
+    assert_eq!(
+        Path::new(
+            report(&one)["result"]["settings"]["server_path"]
+                .as_str()
+                .unwrap()
+        ),
+        launch.join("one").join("custom-server")
+    );
+    let other = launch.join("other");
+    fixture(&other);
+    let other = run(
+        launch,
+        &["config", "show", "--repo-root", other.to_str().unwrap()],
+    );
+    assert_eq!(
+        report(&other)["result"]["settings"]["server_path"],
+        "server"
+    );
 }
 
 #[test]

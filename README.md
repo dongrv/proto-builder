@@ -48,7 +48,7 @@ proto-builder self-update check # 检查官方更新
 proto-builder self-update apply # 下载、验签并更新
 ```
 
-配置示例见 [proto-builder.toml.example](proto-builder.toml.example)。网页也可预览配置差异并保存，自动更新仅提示，显式执行 `apply` 才替换程序。更多参数使用 `proto-builder --help`。
+优先识别团队的 `ENV_CENTER_PROJECT`、`ENV_CAL_CENTER_PROJECT`、`ENV_PROTOBUF`、`ENV_DEVELOPER_NAME`。缺失时提示核对，首次编译成功后记住路径和名字，后续直接复用。配置示例见 [proto-builder.toml.example](proto-builder.toml.example)。网页也可预览配置差异并保存，自动更新仅提示，显式执行 `apply` 才替换程序。更多参数使用 `proto-builder --help`。
 
 ## 详细文档
 

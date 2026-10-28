@@ -1,4 +1,4 @@
-use crate::{cli::Options, util};
+use crate::{cli::Options, setup, util};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -15,6 +15,7 @@ pub struct Settings {
     pub proto_path: PathBuf,
     pub server_path: PathBuf,
     pub calc_path: PathBuf,
+    pub developer_name: String,
     pub assign_id: u64,
     pub activity_ids: Vec<String>,
     pub machine_ids: Vec<String>,
@@ -60,6 +61,7 @@ impl Default for Settings {
             proto_path: PathBuf::from("proto"),
             server_path: PathBuf::from("../../../server/branches/beta"),
             calc_path: PathBuf::from("../../../cal_center/branches/beta"),
+            developer_name: String::new(),
             assign_id: 0,
             activity_ids: vec![],
             machine_ids: vec![],
@@ -152,6 +154,15 @@ pub fn load(options: &Options) -> Result<Loaded> {
     load_from(options, &env::current_dir()?, Some(&util::user_config()?))
 }
 pub fn load_from(options: &Options, cwd: &Path, user: Option<&Path>) -> Result<Loaded> {
+    load_with_team(options, cwd, user, &setup::Team::read())
+}
+fn load_with_team(
+    options: &Options,
+    cwd: &Path,
+    user: Option<&Path>,
+    team: &setup::Team,
+) -> Result<Loaded> {
+    let profiles = setup::Profiles::read()?;
     let mut value = toml::Value::try_from(Settings::default())?;
     let mut sources = vec![];
     if let Some(user) = user.filter(|p| p.is_file()) {
@@ -162,6 +173,16 @@ pub fn load_from(options: &Options, cwd: &Path, user: Option<&Path>) -> Result<L
         .repo_root
         .as_deref()
         .map(|p| util::absolute(cwd, p))
+        .or_else(|| {
+            env::var_os("PROTO_BUILDER_PROJECT_ROOT").map(|p| util::absolute(cwd, Path::new(&p)))
+        })
+        .or_else(|| team.root.clone())
+        .or_else(|| {
+            cwd.ancestors()
+                .find(|p| p.join("proto").is_dir() || p.join("proto-builder.toml").is_file())
+                .map(Path::to_path_buf)
+        })
+        .or_else(|| profiles.last_root.clone().filter(|p| p.is_dir()))
         .unwrap_or_else(|| cwd.to_owned());
     let explicit = options.config.as_ref().map(|p| util::absolute(cwd, p));
     let project_file = explicit.clone().or_else(|| {
@@ -186,7 +207,6 @@ pub fn load_from(options: &Options, cwd: &Path, user: Option<&Path>) -> Result<L
     } else {
         None
     };
-    apply_env(&mut settings)?;
     let env_root =
         env::var_os("PROTO_BUILDER_PROJECT_ROOT").map(|p| util::absolute(cwd, Path::new(&p)));
     let root = options
@@ -194,6 +214,13 @@ pub fn load_from(options: &Options, cwd: &Path, user: Option<&Path>) -> Result<L
         .as_deref()
         .map(|p| util::absolute(cwd, p))
         .or(env_root)
+        .or_else(|| {
+            if options.config.is_none() {
+                team.root.clone()
+            } else {
+                None
+            }
+        })
         .or(config_root)
         .or_else(|| {
             search
@@ -202,6 +229,35 @@ pub fn load_from(options: &Options, cwd: &Path, user: Option<&Path>) -> Result<L
                 .map(Path::to_path_buf)
         })
         .unwrap_or(search);
+    if options.config.is_none() {
+        if let Some(saved) = profiles.projects.get(&util::path_key(&root)) {
+            settings.proto_path = saved.proto.clone();
+            settings.server_path = saved.server.clone();
+            settings.calc_path = saved.calc.clone();
+            settings.developer_name = saved.developer_name.clone();
+        }
+    }
+    if let Some(v) = &team.server {
+        settings.server_path = v.clone();
+    }
+    if let Some(v) = &team.calc {
+        settings.calc_path = v.clone();
+    }
+    if let Some(v) = &team.developer {
+        settings.developer_name = v.clone();
+    }
+    if let Some(v) = &team.proto {
+        if team
+            .root
+            .as_ref()
+            .is_some_and(|r| util::path_key(&root) == util::path_key(r))
+            && options.config.is_none()
+        {
+            settings.proto_path = v.clone();
+        }
+    }
+
+    apply_env(&mut settings)?;
     if let Some(v) = &options.proto_path {
         settings.proto_path = v.clone();
     }
@@ -210,6 +266,9 @@ pub fn load_from(options: &Options, cwd: &Path, user: Option<&Path>) -> Result<L
     }
     if let Some(v) = &options.calc_path {
         settings.calc_path = v.clone();
+    }
+    if let Some(v) = &options.developer_name {
+        settings.developer_name = v.trim().to_owned();
     }
     if let Some(v) = options.assign_id {
         settings.assign_id = v;
@@ -346,6 +405,9 @@ fn apply_env(s: &mut Settings) -> Result<()> {
     Ok(())
 }
 pub fn validate(s: &Settings) -> Result<()> {
+    if s.developer_name.chars().any(char::is_control) {
+        bail!("[E_CONFIG] developer_name must not contain control characters");
+    }
     if s.config_version != 1 {
         bail!("[E_CONFIG] unsupported config_version {}", s.config_version);
     }
@@ -394,7 +456,7 @@ mod tests {
             timeout_seconds: Some(180),
             ..Default::default()
         };
-        let loaded = load_from(&opts, root, None).unwrap();
+        let loaded = load_with_team(&opts, root, None, &setup::Team::default()).unwrap();
         assert_eq!(loaded.settings.proto_path, PathBuf::from("proto"));
         assert!(!loaded.settings.svn.update);
         assert_eq!(loaded.settings.timeout_seconds, 180);
@@ -406,7 +468,13 @@ mod tests {
         let file = dir.path().join("proto-builder.toml");
         for text in ["config_version=999", "prot_path='oops'"] {
             fs::write(&file, text).unwrap();
-            assert!(load_from(&Options::default(), dir.path(), None).is_err());
+            assert!(load_with_team(
+                &Options::default(),
+                dir.path(),
+                None,
+                &setup::Team::default()
+            )
+            .is_err());
         }
     }
 }

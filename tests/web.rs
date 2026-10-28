@@ -23,6 +23,10 @@ impl Web {
             .arg(root)
             .current_dir(root)
             .env("PROTO_BUILDER_HOME", root.join("user-data"))
+            .env_remove("ENV_CENTER_PROJECT")
+            .env_remove("ENV_CAL_CENTER_PROJECT")
+            .env_remove("ENV_PROTOBUF")
+            .env_remove("ENV_DEVELOPER_NAME")
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
             .spawn()
@@ -111,6 +115,49 @@ fn fixture(root: &Path) {
     fs::write(root.join("proto/cmd/common.proto"), "syntax=\"proto3\";\npackage cmd;\noption go_package=\"example/protocol/cmd\";\n// SEQ[100,200]\nmessage HelloReq {string name=1;}\nmessage HelloResp {string value=1;}\n").unwrap();
     fs::write(root.join("proto/act7034/bonus.proto"), "syntax=\"proto3\";\npackage act7034;\noption go_package=\"example/protocol/act7034\";\n// SEQ[300,400]\nmessage BonusReq {}\n").unwrap();
     fs::write(root.join("proto-builder.toml"), "config_version=1\nserver_path='server'\ncalc_path='calc'\n[svn]\nupdate=false\n[update]\nenabled=false\n").unwrap();
+}
+
+#[test]
+fn first_use_setup_survives_restart_only_after_success() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    fixture(root);
+    let mut web = Web::start(root);
+    let state: Value = web.get("/api/state").json().unwrap();
+    assert_eq!(state["setup"]["needs_confirmation"], true);
+    assert_eq!(state["setup"]["issues"].as_array().unwrap().len(), 4);
+    let mut form = web.form();
+    form["settings"]["developer_name"] = "董荣旺".into();
+    form["settings"]["server_path"] = "manual-server".into();
+    form["settings"]["calc_path"] = "manual-calc".into();
+    let plan = web.start_job("plan", &form);
+    assert_eq!(web.wait(&plan)["status"], "success");
+    let saved = root.join("user-data/local-setup.json");
+    assert!(!saved.exists());
+    let mut bad = form.clone();
+    bad["settings"]["activity_ids"] = json!(["99999"]);
+    let failed = web.start_job("build", &bad);
+    assert_eq!(web.wait(&failed)["status"], "failed");
+    assert!(!saved.exists());
+    let job = web.start_job("build", &form);
+    assert_eq!(web.wait(&job)["status"], "success");
+    let state: Value = web.get("/api/state").json().unwrap();
+    assert_eq!(state["setup"]["needs_confirmation"], false);
+    assert_eq!(state["setup"]["saved"], true);
+    web.stop();
+    let mut restarted = Web::start(root);
+    let state: Value = restarted.get("/api/state").json().unwrap();
+    assert_eq!(state["setup"]["needs_confirmation"], false);
+    assert_eq!(state["settings"]["developer_name"], "董荣旺");
+    assert_eq!(
+        state["settings"]["server_path"],
+        root.join("manual-server").to_str().unwrap()
+    );
+    assert_eq!(
+        state["settings"]["calc_path"],
+        root.join("manual-calc").to_str().unwrap()
+    );
+    restarted.stop();
 }
 
 #[test]

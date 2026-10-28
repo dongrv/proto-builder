@@ -39,6 +39,8 @@ pub struct Options {
     pub server_path: Option<PathBuf>,
     #[arg(long, alias = "calc_path", global = true)]
     pub calc_path: Option<PathBuf>,
+    #[arg(long, global = true, help = "开发者名字 / Developer name")]
+    pub developer_name: Option<String>,
     #[arg(
         long,
         alias = "assignID",

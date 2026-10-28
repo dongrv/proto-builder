@@ -21,8 +21,12 @@
     协议目录: "Protocol directory",
     业务服目录: "Server directory",
     计算服目录: "Calculation server directory",
-    "相对路径以项目目录为起点。设置默认仅对本次生效。":
-      "Relative paths start at the project directory. Changes apply to this session until saved.",
+    开发者名字: "Developer name",
+    "首次使用，请核对项目路径": "First use: check project paths",
+    "部分团队环境变量未设置或无效，请确认下方路径与开发者名字。首次编译成功后自动记住，后续直接复用。":
+      "Some team environment variables are missing or invalid. Check the paths and developer name below. They will be remembered after the first successful build.",
+    "相对路径以项目目录为起点。路径和名字在编译成功后自动记住，其他设置可另存配置。":
+      "Relative paths start at the project directory. Paths and name are remembered after a successful build; save other settings as configuration.",
     选择协议: "Select protocols",
     重置筛选: "Reset filters",
     "活动 ID": "Activity IDs",
@@ -291,12 +295,21 @@
     if (state.report) renderReport(state.report);
     if (state.events.length) renderLogs();
     if (state.folder) renderFolders();
+    renderSetup();
+  }
+  function renderSetup() {
+    const setup = state.loaded?.setup;
+    $("setup-notice").hidden = !setup?.needs_confirmation;
+    $("setup-issues").replaceChildren(
+      ...(setup?.issues || []).map((issue) => node("li", issue)),
+    );
   }
   function fill(data) {
     state.loaded = data;
     const s = data.settings;
     $("version").textContent = `v${data.version}`;
     $("root").value = data.root;
+    $("developer-name").value = s.developer_name || "";
     for (const name of ["proto", "server", "calc"])
       $(`${name}-path`).value = s[`${name}_path`];
     for (const [id, value] of Object.entries({
@@ -359,6 +372,7 @@
       s[key] = value;
     }
     s.lang = $("lang").value;
+    s.developer_name = $("developer-name").value.trim();
     return {
       root: $("root").value.trim(),
       settings: s,
@@ -653,8 +667,12 @@
           $("result-view").scrollTop = 0;
           $("completion-box").scrollIntoView({ block: "nearest" });
         }
-        if (data.status === "success" && data.command === "build")
+        if (data.status === "success" && data.command === "build") {
+          const current = await api("/api/state");
+          state.loaded.setup = current.setup;
+          renderSetup();
           loadCatalog();
+        }
         if (data.report_error) notice(data.report_error, true);
       } else {
         setBusy(true);

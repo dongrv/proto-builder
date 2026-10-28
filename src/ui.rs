@@ -97,7 +97,19 @@ pub fn wizard(
     let _terminal = Terminal::enter()?;
     let mut selected = 0;
     let mut offset = 0;
-    let mut notice = last_error.unwrap_or("").to_owned();
+    let setup = crate::setup::status(loaded)?;
+    let mut notice = last_error.map(str::to_owned).unwrap_or_else(|| {
+        if setup.needs_confirmation {
+            tr(
+                &loaded.settings,
+                "请核对项目/协议/业务服/计算服路径；成功编译后自动记住。",
+                "Check project/proto/server/calc paths; remembered after a successful build.",
+            )
+            .into()
+        } else {
+            String::new()
+        }
+    });
     loop {
         execute!(io::stdout(), Clear(ClearType::All))?;
         let s = &loaded.settings;
@@ -194,6 +206,11 @@ pub fn wizard(
             .into(),
             tr(s, "预览编译计划", "Preview plan").into(),
             tr(s, "开始编译", "Build").into(),
+            format!(
+                "{}: {}",
+                tr(s, "开发者名字", "Developer name"),
+                s.developer_name
+            ),
         ];
         let (_, height) = terminal::size()?;
         let available = height.saturating_sub(9).max(1) as usize;
@@ -216,8 +233,8 @@ pub fn wizard(
             footer,
             tr(
                 s,
-                "执行前可预览；交互选择默认只对本次生效。",
-                "Preview before building; choices apply only to this run.",
+                "路径和名字在编译成功后记住；其他选项可另存配置。",
+                "Paths and name are remembered after a successful build; save other options as configuration.",
             ),
             false,
         )?;
@@ -453,6 +470,15 @@ pub fn wizard(
                         notice = "Saved".into();
                     }
                 }
+                20 => {
+                    if let Some(value) = input(
+                        tr(&loaded.settings, "开发者名字", "Developer name"),
+                        &loaded.settings.developer_name,
+                    )? {
+                        loaded.settings.developer_name = value.trim().to_owned();
+                        config::validate(&loaded.settings)?;
+                    }
+                }
                 _ => {}
             }
             Ok(())
@@ -684,6 +710,7 @@ pub fn equivalent(loaded: &Loaded, command: &str, options: &Options) -> String {
     if options.adopt_existing {
         args.push("--adopt-existing".into());
     }
+    args.push(format!("--developer-name={}", quote(&s.developer_name)));
     if options.force {
         args.push("--force".into());
     }

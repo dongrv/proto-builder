@@ -19,6 +19,7 @@ use std::{
 };
 
 pub fn plan(loaded: &Loaded, report: &Reporter) -> Result<()> {
+    crate::setup::notify(loaded, report)?;
     let p = scan::make(&loaded.root, &loaded.settings)?;
     report.info(
         "plan",
@@ -80,6 +81,7 @@ pub fn plan(loaded: &Loaded, report: &Reporter) -> Result<()> {
 pub fn run(loaded: &Loaded, options: &Options, report: &Reporter) -> Result<()> {
     let root = &loaded.root;
     let s = &loaded.settings;
+    crate::setup::notify(loaded, report)?;
     let proto = s.proto(root);
     let server = s.server(root);
     let calc = s.calc(root);
@@ -118,7 +120,7 @@ pub fn run(loaded: &Loaded, options: &Options, report: &Reporter) -> Result<()> 
     }
     let p = scan::make(root, s)?;
     let tools = toolchain::resolve(root, s, report)?;
-    report.context(json!({"project_root":root,"proto_root":proto,"config_sources":loaded.sources,"toolchain":tools.provenance,"svn":svn,"jobs":s.workers(),"selected_proto_files":p.selected.len(),"excluded":p.excluded,"filtered":p.filtered}));
+    report.context(json!({"project_root":root,"proto_root":proto,"developer_name":s.developer_name,"config_sources":loaded.sources,"toolchain":tools.provenance,"svn":svn,"jobs":s.workers(),"selected_proto_files":p.selected.len(),"excluded":p.excluded,"filtered":p.filtered}));
     report.info("source", proto.display().to_string());
     report.info(
         "generate",
@@ -393,6 +395,10 @@ pub fn run(loaded: &Loaded, options: &Options, report: &Reporter) -> Result<()> 
         })
         .collect::<Result<Vec<_>>>()?;
     report.result(json!({"proto_files":p.selected.len(),"documentation_proto_files":p.documentation_inputs.len(),"groups":p.groups.len(),"commands":commands.load(Ordering::Relaxed),"changes":changes,"outputs":hashes,"legacy_baseline":"not-run-at-runtime"}));
+    match crate::setup::remember(loaded) {
+        Ok(()) => report.info("setup", report.text("已记住本机项目路径与开发者信息", "Local project paths and developer information remembered")),
+        Err(error) => report.emit("setup", "warning", format!("生成物已写回，但本机设置保存失败，下次仍需确认 / Outputs deployed, but local setup could not be saved: {error:#}")),
+    }
     Ok(())
 }
 fn protoc(

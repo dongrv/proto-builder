@@ -6,6 +6,7 @@ mod process;
 mod protocol;
 mod report;
 mod scan;
+mod setup;
 mod svn;
 mod toolchain;
 mod transaction;

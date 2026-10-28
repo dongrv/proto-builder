@@ -4,6 +4,7 @@ project_root = "."
 proto_path = "proto"
 server_path = "../../../server/branches/beta"
 calc_path = "../../../cal_center/branches/beta"
+developer_name = "" # defaults to ENV_DEVELOPER_NAME or remembered local identity
 
 assign_id = 0
 activity_ids = []

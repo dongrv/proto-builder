@@ -84,6 +84,20 @@
                     保存配置
                   </button>
                 </div>
+                <div
+                  id="setup-notice"
+                  class="setup-notice"
+                  role="status"
+                  hidden
+                >
+                  <strong data-i18n>首次使用，请核对项目路径</strong>
+                  <p data-i18n>
+                    部分团队环境变量未设置或无效，请确认下方路径与开发者名字。首次编译成功后自动记住，后续直接复用。
+                  </p>
+                  <ul id="setup-issues"></ul>
+                </div>
+                <label for="developer-name" data-i18n>开发者名字</label>
+                <input id="developer-name" type="text" autocomplete="name" />
                 <label for="root" data-i18n>项目目录</label>
                 <div class="input-row project-input">
                   <input
@@ -165,7 +179,7 @@
                   </div>
                 </div>
                 <p class="field-note" data-i18n>
-                  相对路径以项目目录为起点。设置默认仅对本次生效。
+                  相对路径以项目目录为起点。路径和名字在编译成功后自动记住，其他设置可另存配置。
                 </p>
               </section>
               <section class="form-section">

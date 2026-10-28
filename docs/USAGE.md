@@ -49,7 +49,7 @@ proto-builder web --no-open
 - 活动 ID、机器 ID 从真实协议自动读取，支持搜索、多选，输入数字后按 Enter 可添加；排除项支持目录和 glob。空选、交集、公共依赖等规则与 CLI 相同。
 - 「预览计划」列出实际扫描、筛选和编译范围；「检查环境」验证开发环境；「开始编译」执行 SVN 更新、生成和安全写回。
 - 构建时查看增量日志和阶段、停止当前操作，结束后按新增、修改、删除、未变查看文件，搜索结果或下载完整 JSON 报告。错误保留原文件、行、列，点击文件位置可复制。
-- 设置默认只在当前会话生效。「保存配置」先展示差异，确认后写入项目 TOML 并备份；配置被其他程序修改时拒绝覆盖，需重新预览。
+- 路径与开发者名字在首次编译成功后保存到本机；筛选和其他开关默认只在当前会话生效。「保存配置」先展示差异，确认后写入项目 TOML 并备份；配置被其他程序修改时拒绝覆盖，需重新预览。
 
 同一网页服务一次只执行一项任务，执行期间锁定参数；停止后可以直接调整重试。刷新页面可恢复当前或最近一次任务。关闭浏览器标签页不会停止构建；点击页面底部「关闭工作台」或在启动终端按 Ctrl+C 才会停止服务及当前任务。
 
@@ -102,7 +102,7 @@ proto-builder config check
 proto-builder --config D:\Configs\project.toml plan
 ```
 
-配置结构参见 [proto-builder.toml.example](../proto-builder.toml.example)。合并优先级从低到高为：内置默认值 → 用户配置 → 项目配置（或 `--config` 指定文件）→ 环境变量 → CLI。显式配置替代自动发现的项目配置。数组整体替换；CLI 传入空值可清空 ID 或排除项，例如 `--activity-id=`。
+配置结构参见 [proto-builder.toml.example](../proto-builder.toml.example)。合并优先级从低到高为：内置默认值 → 用户配置 → 项目配置（或 `--config` 指定文件）→ 已成功使用的本机路径与开发者档案 → 团队环境变量 → PROTO_BUILDER_* 环境变量 → CLI / 网页手动输入。显式配置替代自动发现的项目配置。数组整体替换；CLI 传入空值可清空 ID 或排除项，例如 `--activity-id=`。
 
 用户配置在 `%LOCALAPPDATA%\ProtoBuilder\config.toml`。项目配置从项目起点向上查找 `proto-builder.toml`。配置中的 `project_root` 相对于配置所在目录；`proto_path`、`server_path`、`calc_path` 相对于最终项目根目录。CLI 的 `--repo-root` 相对于执行目录。
 
@@ -111,6 +111,21 @@ proto-builder --config D:\Configs\project.toml plan
 版本 0 的配置可读入并在内存中升级。`config migrate --check` 只预览；`config migrate` 确认后写回并保留 `.toml.bak`。不自动覆盖用户配置。
 
 `--no-docs`、`--no-config`、`--no-copy`、`--no-svn-update` 关闭对应功能；`--docs=true`、`--protocol-config=true`、`--copy-to-calc=true`、`--svn-update=true` 可以显式覆盖配置中的关闭设置。
+
+### 团队环境变量与首次使用
+
+| 变量 | 用途 |
+| --- | --- |
+| `ENV_CENTER_PROJECT` | 业务服项目的绝对目录 |
+| `ENV_CAL_CENTER_PROJECT` | 计算服项目的绝对目录 |
+| `ENV_PROTOBUF` | 协议项目根目录，通常包含 `proto/`；也可指向名为 `proto` 的协议目录 |
+| `ENV_DEVELOPER_NAME` | 开发者名字 |
+
+启动优先读取有效团队环境变量，可覆盖 TOML 和已保存的本机值。网页手动填写和显式 CLI 参数仍优先；开发者名字也可用 `--developer-name` 指定。路径必须是已存在的绝对目录；空值按未设置处理。无效值会说明原因，并使用已有配置或本机值作为待核对的默认值。业务服与计算服相同时会提示核对，构建仍遵循既有输出目录隔离校验。
+
+变量缺失且尚无匹配的成功记录时，网页显示核对提示，终端向导提示检查路径，CLI 的 plan/build 在日志列出路径和提醒。可在网页或向导填写名字和调整路径。首次编译成功后，仅路径和名字会保存到 `%LOCALAPPDATA%\ProtoBuilder\local-setup.json`，按项目隔离；预览、失败及取消不会登记成功记录，也不会修改系统环境变量。报告也会记录开发者名字。
+
+后续变量缺失时复用本机档案，不再重复提示；有效环境变量改变时采用新值。新出现的无效环境变量仍提示修正。显式 `--config FILE` 使用该配置文件的路径，不套用本机档案；环境变量和显式路径参数依然可覆盖。更换项目、路径或名字后，缺失变量的情况会重新提示核对，并在下次成功编译后记住新值。删除本机 `local-setup.json` 可清除记忆。`PROTO_BUILDER_HOME` 可隔离这些本机信息。
 
 ## 生成与结果可靠性
 
