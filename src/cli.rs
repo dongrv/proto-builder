@@ -16,6 +16,12 @@ pub struct Cli {
 }
 #[derive(Debug, Clone, Default, Args)]
 pub struct Options {
+    #[arg(
+        long,
+        global = true,
+        help = "Agent 稳定 JSON 摘要与非交互调用 / Versioned agent interface"
+    )]
+    pub agent: bool,
     #[arg(long,global=true,num_args=0..=1,default_missing_value="true")]
     pub docs: Option<bool>,
     #[arg(long,global=true,num_args=0..=1,default_missing_value="true")]
@@ -31,7 +37,7 @@ pub struct Options {
         help = "指定 TOML 配置 / Explicit configuration"
     )]
     pub config: Option<PathBuf>,
-    #[arg(long, global = true, help = "项目根目录 / Project root")]
+    #[arg(long, global = true, help = "协议项目根目录 / Protocol project root")]
     pub repo_root: Option<PathBuf>,
     #[arg(long, alias = "proto_path", global = true)]
     pub proto_path: Option<PathBuf>,
@@ -144,6 +150,11 @@ pub enum Cmd {
     Plan,
     #[command(about = "检查配置、工具链、SVN 和输出权限 / Diagnose environment")]
     Doctor,
+    #[command(about = "导出内置 Codex Skill（不覆盖已有文件） / Export bundled Codex skill")]
+    Skill {
+        #[arg(long, value_name = "DIRECTORY")]
+        output: PathBuf,
+    },
     #[command(about = "与内部基准逐字节比较 / Compare internal baseline")]
     Compat {
         #[arg(long)]
@@ -179,7 +190,13 @@ pub enum Cmd {
 }
 #[derive(Debug, Subcommand)]
 pub enum ConfigCmd {
-    Show,
+    Show {
+        #[arg(
+            long,
+            help = "解释配置来源与覆盖关系 / Explain configuration provenance"
+        )]
+        explain: bool,
+    },
     Check,
     Init {
         #[arg(long)]
@@ -206,6 +223,7 @@ impl Cmd {
             Self::Web { .. } => "web",
             Self::Plan => "plan",
             Self::Doctor => "doctor",
+            Self::Skill { .. } => "skill",
             Self::Compat { .. } => "compat",
             Self::Config(_) => "config",
             Self::Install { .. } => "install",

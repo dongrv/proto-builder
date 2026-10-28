@@ -176,4 +176,4 @@ cargo build --locked --release --bin proto-builder
 
 各版本的测试结果、字节基准和线上升级验收见 [验收记录](VALIDATION.md)。
 
-其他说明：[SVN 日常操作](SVN-WORKFLOW.md)、[旧工具弃用说明](LEGACY-DEPRECATED.md)、[签名与发布](RELEASING.md)、[验收记录](VALIDATION.md)、[第三方许可](THIRD-PARTY-NOTICES.md)。
+其他说明：[Codex / Agent 接口](AGENT-INTERFACE.md)、[SVN 日常操作](SVN-WORKFLOW.md)、[旧工具弃用说明](LEGACY-DEPRECATED.md)、[签名与发布](RELEASING.md)、[验收记录](VALIDATION.md)、[第三方许可](THIRD-PARTY-NOTICES.md)。

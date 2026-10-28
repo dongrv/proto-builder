@@ -1,4 +1,4 @@
-use crate::util;
+use crate::{agent, util};
 use anyhow::{Context, Result};
 use serde::Serialize;
 use serde_json::Value;
@@ -7,7 +7,7 @@ use std::{
     io::{self, IsTerminal},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex, OnceLock,
     },
     time::Instant,
@@ -36,6 +36,10 @@ pub struct Report {
     pub events: Vec<Event>,
     pub diagnostics: Vec<Diagnostic>,
     pub error: Option<String>,
+    pub failure: Option<agent::Failure>,
+    pub output_state: &'static str,
+    pub generated_files_changed: Option<bool>,
+    pub recovered_previous_transaction: bool,
 }
 #[derive(Debug, Serialize)]
 pub struct Event {
@@ -50,9 +54,11 @@ pub struct Reporter {
     start: Instant,
     pub json: bool,
     pub verbose: bool,
+    pub agent: bool,
     print_json: bool,
     english: Arc<AtomicBool>,
     retention: Arc<AtomicUsize>,
+    last_progress_ms: Arc<AtomicU64>,
 }
 impl Reporter {
     pub fn new(command: &str, json: bool, verbose: bool, lang: &str) -> Self {
@@ -72,14 +78,42 @@ impl Reporter {
                 events: vec![],
                 diagnostics: vec![],
                 error: None,
+                failure: None,
+                output_state: "not_written",
+                generated_files_changed: Some(false),
+                recovered_previous_transaction: false,
             })),
             start: Instant::now(),
             json,
             verbose,
+            agent: false,
             print_json: json,
             english: Arc::new(AtomicBool::new(lang == "en-US")),
             retention: Arc::new(AtomicUsize::new(20)),
+            last_progress_ms: Arc::new(AtomicU64::new(0)),
         }
+    }
+    pub fn for_agent(command: &str, verbose: bool, lang: &str) -> Self {
+        let mut report = Self::new(command, true, verbose, lang);
+        report.agent = true;
+        report.print_json = false;
+        report
+    }
+    pub fn agent_output(&self, storage: &Result<PathBuf>) -> Value {
+        let report = self.report.lock().unwrap_or_else(|e| e.into_inner());
+        redact_value(agent::envelope(&report, storage))
+    }
+    pub fn outputs(&self, state: &'static str, changed: Option<bool>) {
+        let mut report = self.report.lock().unwrap_or_else(|e| e.into_inner());
+        if state == "recovering" {
+            report.recovered_previous_transaction = true;
+        }
+        report.output_state = state;
+        report.generated_files_changed = if report.recovered_previous_transaction {
+            None
+        } else {
+            changed
+        };
     }
     pub fn for_web(command: &str, lang: &str, retention: usize) -> Self {
         let mut report = Self::new(command, true, false, lang);
@@ -113,8 +147,20 @@ impl Reporter {
     }
     pub fn emit(&self, phase: &str, level: &'static str, message: impl Into<String>) {
         let message = redact(&message.into());
-        if !self.json && (level != "debug" || self.verbose) {
-            if io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none() {
+        let progress_visible = !self.agent
+            || self.verbose
+            || level != "info"
+            || (phase != "select"
+                && (phase != "compile"
+                    || self
+                        .last_progress_ms
+                        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |last| {
+                            let now = self.start.elapsed().as_millis() as u64;
+                            (now.saturating_sub(last) >= 250).then_some(now)
+                        })
+                        .is_ok()));
+        if progress_visible && (!self.json || self.agent) && (level != "debug" || self.verbose) {
+            if !self.agent && io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none() {
                 let color = match level {
                     "error" => 31,
                     "warning" => 33,
@@ -142,16 +188,18 @@ impl Reporter {
         self.emit(phase, "debug", message);
     }
     pub fn context(&self, value: Value) {
-        self.report
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .context = redact_value(value);
+        let mut report = self.report.lock().unwrap_or_else(|e| e.into_inner());
+        let value = redact_value(value);
+        if let (Some(existing), Some(patch)) = (report.context.as_object_mut(), value.as_object()) {
+            existing.extend(patch.clone());
+        } else {
+            report.context = value;
+        }
     }
     pub fn result(&self, value: Value) {
         self.report.lock().unwrap_or_else(|e| e.into_inner()).result = redact_value(value);
     }
     pub fn finish(&self, outcome: &Result<()>, explicit: Option<&Path>) -> Result<PathBuf> {
-        let dir = util::data_dir()?.join("logs");
         let mut report = self.report.lock().unwrap_or_else(|e| e.into_inner());
         report.duration_seconds = self.start.elapsed().as_secs_f64();
         report.status = if outcome.is_ok() { "success" } else { "failed" }.into();
@@ -189,8 +237,10 @@ impl Reporter {
                     }
                 }
             }
+            report.failure = Some(agent::Failure::from_error(error, &report.diagnostics));
             report.error = Some(message);
         }
+        let dir = util::data_dir()?.join("logs");
         let path = dir.join(format!("{}.json", report.run_id));
         fs::create_dir_all(&dir)?;
         util::write_json(&path, &*report)?;

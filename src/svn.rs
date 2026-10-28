@@ -63,7 +63,8 @@ pub fn snapshot(root: &Path, s: &Settings, report: &Reporter) -> Result<Snapshot
         "svn-info",
         s.timeout_seconds,
         report,
-    )?;
+    )
+    .context("[E_SVN] svn info failed")?;
     let info: Info =
         quick_xml::de::from_str(&output.stdout).context("[E_SVN] parse svn info --xml")?;
     Ok(Snapshot {
@@ -80,7 +81,8 @@ pub fn conflicts(root: &Path, s: &Settings, report: &Reporter) -> Result<Vec<Str
         "svn-status",
         s.timeout_seconds,
         report,
-    )?;
+    )
+    .context("[E_SVN] svn status failed")?;
     parse_conflicts(&output.stdout)
 }
 fn parse_conflicts(text: &str) -> Result<Vec<String>> {

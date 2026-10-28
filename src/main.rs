@@ -1,9 +1,11 @@
+mod agent;
 mod build;
 mod cli;
 mod config;
 mod install;
 mod process;
 mod protocol;
+mod provenance;
 mod report;
 mod scan;
 mod setup;
@@ -26,16 +28,58 @@ use std::{
 };
 
 fn main() {
-    let cli = Cli::parse();
+    let args = std::env::args_os().collect::<Vec<_>>();
+    let agent_requested = args
+        .iter()
+        .skip(1)
+        .take_while(|s| *s != "--")
+        .any(|s| s == "--agent");
+    let mut cli = match Cli::try_parse_from(args) {
+        Ok(cli) => cli,
+        Err(error) if agent_requested => {
+            let reporter = Reporter::for_agent("arguments", false, "en-US");
+            let outcome = if matches!(
+                error.kind(),
+                clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
+            ) {
+                reporter.result(serde_json::json!({"help":error.to_string()}));
+                Ok(())
+            } else {
+                Err(anyhow::anyhow!("[E_ARGUMENT] {error}"))
+            };
+            let storage = reporter.finish(&outcome, None);
+            let value = reporter.agent_output(&storage);
+            println!("{value}");
+            std::process::exit(value["exit_code"].as_i64().unwrap_or(1) as i32);
+        }
+        Err(error) => error.exit(),
+    };
+    if cli.options.agent {
+        cli.options.json = true;
+        cli.options.non_interactive = true;
+    }
     let _ = ctrlc::set_handler(|| {
         util::SHUTDOWN.store(true, Ordering::Relaxed);
         util::CANCELLED.store(true, Ordering::Relaxed);
     });
     let name = cli.command.as_ref().map(Cmd::name).unwrap_or("interactive");
     let language = cli.options.lang.as_deref().unwrap_or("zh-CN");
-    let reporter = Reporter::new(name, cli.options.json, cli.options.verbose, language);
+    let reporter = if cli.options.agent {
+        Reporter::for_agent(name, cli.options.verbose, language)
+    } else {
+        Reporter::new(name, cli.options.json, cli.options.verbose, language)
+    };
     let outcome = execute(&cli, &reporter);
     let report_path = reporter.finish(&outcome, cli.options.report_json.as_deref());
+    if cli.options.agent {
+        let value = reporter.agent_output(&report_path);
+        println!("{value}");
+        let code = value["exit_code"].as_i64().unwrap_or(1) as i32;
+        if code != 0 {
+            std::process::exit(code);
+        }
+        return;
+    }
     if let Err(error) = &outcome {
         if !cli.options.json {
             eprintln!(
@@ -62,6 +106,13 @@ fn main() {
     }
 }
 fn execute(cli: &Cli, report: &Reporter) -> Result<()> {
+    if cli.options.agent
+        && (cli.command.is_none()
+            || cli.options.interactive
+            || matches!(cli.command, Some(Cmd::Web { .. })))
+    {
+        bail!("[E_ARGUMENT] --agent requires an explicit non-interactive command; use config show, doctor, plan or build");
+    }
     match &cli.command {
         Some(Cmd::Licenses) => {
             let notices = [
@@ -142,6 +193,7 @@ fn execute(cli: &Cli, report: &Reporter) -> Result<()> {
             return install::uninstall(*system, *purge, report)
         }
         Some(Cmd::SelfUpdate(UpdateCmd::Rollback)) => return update::rollback(report),
+        Some(Cmd::Skill { output }) => return agent::export_skill(output, report),
         _ => {}
     }
     let mut loaded = config::load(&cli.options)?;
@@ -167,7 +219,9 @@ fn execute(cli: &Cli, report: &Reporter) -> Result<()> {
     }
     report.configure(&loaded.settings.lang, loaded.settings.log_retention);
     report.context(
-        serde_json::json!({"project_root":loaded.root,"configuration_sources":loaded.sources}),
+        serde_json::json!({"project_root":loaded.root,"proto_root":loaded.settings.proto(&loaded.root),"server_root":loaded.settings.server(&loaded.root),"calc_root":loaded.settings.calc(&loaded.root),"configuration_sources":loaded.sources,
+            "selection":{"activity_ids":loaded.settings.activity_ids,"machine_ids":loaded.settings.machine_ids,"assign_id":loaded.settings.assign_id,"excludes":loaded.settings.excludes},
+            "policy":{"svn_update":loaded.settings.svn.update,"docs":loaded.settings.docs,"protocol_config":loaded.settings.protocol_config,"copy_to_calc":loaded.settings.copy_to_calc,"force":cli.options.force,"adopt_existing":cli.options.adopt_existing,"toolchain_mode":loaded.settings.toolchain.mode}}),
     );
     if let Some(Cmd::Web { port, no_open }) = &cli.command {
         return web::run(loaded, &cli.options, *port, !*no_open, report);
@@ -268,7 +322,7 @@ fn execute(cli: &Cli, report: &Reporter) -> Result<()> {
     }
 }
 fn start_update_check(settings: &config::Settings, report: &Reporter) {
-    if settings.update.enabled {
+    if settings.update.enabled && !report.agent {
         let settings = settings.clone();
         let report = report.clone();
         std::thread::spawn(move || update::background_check(&settings, &report));
@@ -276,10 +330,20 @@ fn start_update_check(settings: &config::Settings, report: &Reporter) {
 }
 fn config_command(loaded: &config::Loaded, command: &ConfigCmd, report: &Reporter) -> Result<()> {
     match command {
-        ConfigCmd::Show => {
-            report.result(serde_json::json!({"settings":loaded.settings,"sources":loaded.sources,"project_root":loaded.root}));
+        ConfigCmd::Show { explain } => {
+            let mut value = serde_json::json!({"settings":loaded.settings,"sources":loaded.sources,"project_root":loaded.root});
+            if *explain {
+                value["explanation"] = config::explain(loaded)?;
+            }
+            report.result(value);
             if !report.json {
                 eprintln!("{}", toml::to_string_pretty(&loaded.settings)?);
+                if *explain {
+                    eprintln!(
+                        "{}",
+                        serde_json::to_string_pretty(&config::explain(loaded)?)?
+                    );
+                }
             }
             Ok(())
         }

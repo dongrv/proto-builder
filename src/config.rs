@@ -1,4 +1,8 @@
-use crate::{cli::Options, setup, util};
+use crate::{
+    cli::Options,
+    provenance::{self, Origins},
+    setup, util,
+};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -128,6 +132,7 @@ pub struct Loaded {
     pub root: PathBuf,
     pub sources: Vec<PathBuf>,
     pub project_file: Option<PathBuf>,
+    pub origins: Origins,
 }
 impl Settings {
     pub fn proto(&self, root: &Path) -> PathBuf {
@@ -164,9 +169,11 @@ fn load_with_team(
 ) -> Result<Loaded> {
     let profiles = setup::Profiles::read()?;
     let mut value = toml::Value::try_from(Settings::default())?;
+    let mut origins = Origins::default();
+    origins.layer(&serde_json::to_value(&value)?, "default", "built-in");
     let mut sources = vec![];
     if let Some(user) = user.filter(|p| p.is_file()) {
-        merge_file(&mut value, user)?;
+        merge_file(&mut value, user, &mut origins, "user_config")?;
         sources.push(user.to_owned());
     }
     let search = options
@@ -192,7 +199,16 @@ fn load_with_team(
             .find(|p| p.is_file())
     });
     if let Some(path) = &project_file {
-        merge_file(&mut value, path)?;
+        merge_file(
+            &mut value,
+            path,
+            &mut origins,
+            if explicit.is_some() {
+                "explicit_config"
+            } else {
+                "project_config"
+            },
+        )?;
         sources.push(path.clone());
     }
     let mut settings: Settings = value
@@ -209,6 +225,44 @@ fn load_with_team(
     };
     let env_root =
         env::var_os("PROTO_BUILDER_PROJECT_ROOT").map(|p| util::absolute(cwd, Path::new(&p)));
+    let root_source = if options.repo_root.is_some() {
+        ("cli".to_owned(), "--repo-root".to_owned())
+    } else if env_root.is_some() {
+        ("environment".into(), "PROTO_BUILDER_PROJECT_ROOT".into())
+    } else if options.config.is_none() && team.root.is_some() {
+        ("environment".into(), "ENV_PROTOBUF".into())
+    } else if config_root.is_some() {
+        let origin = origins.0.get("project_root").and_then(|items| items.last());
+        if let Some(origin) = origin.filter(|o| o.kind != "default") {
+            (origin.kind.clone(), origin.name.clone())
+        } else if let Some(file) = &project_file {
+            (
+                "project_config_directory".into(),
+                file.display().to_string(),
+            )
+        } else {
+            ("working_directory".into(), cwd.display().to_string())
+        }
+    } else if options.repo_root.is_none()
+        && team.root.is_none()
+        && !cwd
+            .ancestors()
+            .any(|p| p.join("proto").is_dir() || p.join("proto-builder.toml").is_file())
+        && profiles
+            .last_root
+            .as_ref()
+            .is_some_and(|r| r.is_dir() && util::path_key(r) == util::path_key(&search))
+    {
+        (
+            "local_setup".into(),
+            util::data_dir()?
+                .join("local-setup.json")
+                .display()
+                .to_string(),
+        )
+    } else {
+        ("working_directory".into(), cwd.display().to_string())
+    };
     let root = options
         .repo_root
         .as_deref()
@@ -229,22 +283,61 @@ fn load_with_team(
                 .map(Path::to_path_buf)
         })
         .unwrap_or(search);
+    origins.record(
+        "project_root",
+        serde_json::to_value(&root)?,
+        &root_source.0,
+        &root_source.1,
+    );
     if options.config.is_none() {
         if let Some(saved) = profiles.projects.get(&util::path_key(&root)) {
             settings.proto_path = saved.proto.clone();
             settings.server_path = saved.server.clone();
             settings.calc_path = saved.calc.clone();
             settings.developer_name = saved.developer_name.clone();
+            let name = util::data_dir()?
+                .join("local-setup.json")
+                .display()
+                .to_string();
+            for (key, value) in [
+                ("proto_path", serde_json::to_value(&saved.proto)?),
+                ("server_path", serde_json::to_value(&saved.server)?),
+                ("calc_path", serde_json::to_value(&saved.calc)?),
+                (
+                    "developer_name",
+                    serde_json::to_value(&saved.developer_name)?,
+                ),
+            ] {
+                origins.record(key, value, "local_setup", &name);
+            }
         }
     }
     if let Some(v) = &team.server {
         settings.server_path = v.clone();
+        let name = if team.environment.contains_key("ENV_PROJECT") {
+            "ENV_PROJECT"
+        } else {
+            "ENV_CENTER_PROJECT"
+        };
+        origins.record("server_path", serde_json::to_value(v)?, "environment", name);
     }
     if let Some(v) = &team.calc {
         settings.calc_path = v.clone();
+        origins.record(
+            "calc_path",
+            serde_json::to_value(v)?,
+            "environment",
+            "ENV_CAL_CENTER_PROJECT",
+        );
     }
     if let Some(v) = &team.developer {
         settings.developer_name = v.clone();
+        origins.record(
+            "developer_name",
+            serde_json::to_value(v)?,
+            "environment",
+            "ENV_DEVELOPER_NAME",
+        );
     }
     if let Some(v) = &team.proto {
         if team
@@ -254,10 +347,16 @@ fn load_with_team(
             && options.config.is_none()
         {
             settings.proto_path = v.clone();
+            origins.record(
+                "proto_path",
+                serde_json::to_value(v)?,
+                "environment",
+                "ENV_PROTOBUF",
+            );
         }
     }
 
-    apply_env(&mut settings)?;
+    apply_env(&mut settings, &mut origins)?;
     if let Some(v) = &options.proto_path {
         settings.proto_path = v.clone();
     }
@@ -319,11 +418,86 @@ fn load_with_team(
         settings.svn.update = false;
     }
     validate(&settings)?;
+    let final_values = provenance::flatten(&serde_json::to_value(&settings)?);
+    for (key, present, name) in [
+        ("proto_path", options.proto_path.is_some(), "--proto-path"),
+        (
+            "server_path",
+            options.server_path.is_some(),
+            "--server-path",
+        ),
+        ("calc_path", options.calc_path.is_some(), "--calc-path"),
+        (
+            "developer_name",
+            options.developer_name.is_some(),
+            "--developer-name",
+        ),
+        ("assign_id", options.assign_id.is_some(), "--assign-id"),
+        (
+            "activity_ids",
+            !options.activity_ids.is_empty(),
+            "--activity-id",
+        ),
+        (
+            "machine_ids",
+            !options.machine_ids.is_empty(),
+            "--machine-id",
+        ),
+        ("excludes", !options.excludes.is_empty(), "--exclude"),
+        ("jobs", options.jobs.is_some(), "--jobs"),
+        (
+            "timeout_seconds",
+            options.timeout_seconds.is_some(),
+            "--timeout-seconds",
+        ),
+        ("lang", options.lang.is_some(), "--lang"),
+        (
+            "docs",
+            options.docs.is_some() || options.no_docs,
+            if options.no_docs {
+                "--no-docs"
+            } else {
+                "--docs"
+            },
+        ),
+        (
+            "protocol_config",
+            options.protocol_config.is_some() || options.no_config,
+            if options.no_config {
+                "--no-config"
+            } else {
+                "--protocol-config"
+            },
+        ),
+        (
+            "copy_to_calc",
+            options.copy_to_calc.is_some() || options.no_copy,
+            if options.no_copy {
+                "--no-copy"
+            } else {
+                "--copy-to-calc"
+            },
+        ),
+        (
+            "svn.update",
+            options.svn_update.is_some() || options.no_svn_update,
+            if options.no_svn_update {
+                "--no-svn-update"
+            } else {
+                "--svn-update"
+            },
+        ),
+    ] {
+        if present {
+            origins.record(key, final_values[key].clone(), "cli", name);
+        }
+    }
     Ok(Loaded {
         settings,
         root,
         sources,
         project_file,
+        origins,
     })
 }
 fn merge(target: &mut toml::Value, patch: toml::Value) {
@@ -340,7 +514,12 @@ fn merge(target: &mut toml::Value, patch: toml::Value) {
         (target, patch) => *target = patch,
     }
 }
-fn merge_file(value: &mut toml::Value, path: &Path) -> Result<()> {
+fn merge_file(
+    value: &mut toml::Value,
+    path: &Path,
+    origins: &mut Origins,
+    kind: &str,
+) -> Result<()> {
     let text =
         fs::read_to_string(path).with_context(|| format!("[E_CONFIG] read {}", path.display()))?;
     let _: Settings =
@@ -358,10 +537,15 @@ fn merge_file(value: &mut toml::Value, path: &Path) -> Result<()> {
             patch["config_version"] = toml::Value::Integer(1);
         }
     }
+    origins.layer(
+        &serde_json::to_value(&patch)?,
+        kind,
+        &path.display().to_string(),
+    );
     merge(value, patch);
     Ok(())
 }
-fn apply_env(s: &mut Settings) -> Result<()> {
+fn apply_env(s: &mut Settings, origins: &mut Origins) -> Result<()> {
     for (name, target) in [
         ("PROTO_PATH", &mut s.proto_path),
         ("SERVER_PATH", &mut s.server_path),
@@ -386,7 +570,9 @@ fn apply_env(s: &mut Settings) -> Result<()> {
         }
     }
     if let Ok(v) = env::var("PROTO_BUILDER_JOBS") {
-        s.jobs = v.parse().context("PROTO_BUILDER_JOBS must be an integer")?;
+        s.jobs = v
+            .parse()
+            .context("[E_CONFIG] PROTO_BUILDER_JOBS must be an integer")?;
     }
     if let Ok(v) = env::var("PROTO_BUILDER_LANG") {
         s.lang = v;
@@ -394,7 +580,7 @@ fn apply_env(s: &mut Settings) -> Result<()> {
     if let Ok(v) = env::var("PROTO_BUILDER_SVN_UPDATE") {
         s.svn.update = v
             .parse()
-            .context("PROTO_BUILDER_SVN_UPDATE must be true/false")?;
+            .context("[E_CONFIG] PROTO_BUILDER_SVN_UPDATE must be true/false")?;
     }
     if let Ok(v) = env::var("PROTO_BUILDER_TOOLCHAIN_MODE") {
         s.toolchain.mode = v;
@@ -402,7 +588,53 @@ fn apply_env(s: &mut Settings) -> Result<()> {
     if let Ok(v) = env::var("PROTO_BUILDER_UPDATE_CHANNEL") {
         s.update.channel = v;
     }
+    let values = provenance::flatten(&serde_json::to_value(&*s)?);
+    for (name, key) in [
+        ("PROTO_PATH", "proto_path"),
+        ("SERVER_PATH", "server_path"),
+        ("CALC_PATH", "calc_path"),
+        ("ACTIVITY_IDS", "activity_ids"),
+        ("MACHINE_IDS", "machine_ids"),
+        ("EXCLUDES", "excludes"),
+        ("JOBS", "jobs"),
+        ("LANG", "lang"),
+        ("SVN_UPDATE", "svn.update"),
+        ("TOOLCHAIN_MODE", "toolchain.mode"),
+        ("UPDATE_CHANNEL", "update.channel"),
+    ] {
+        let name = format!("PROTO_BUILDER_{name}");
+        let present = if key.ends_with("_path") {
+            env::var_os(&name).is_some()
+        } else {
+            env::var(&name).is_ok()
+        };
+        if present {
+            origins.record(key, values[key].clone(), "environment", &name);
+        }
+    }
     Ok(())
+}
+
+pub fn explain(loaded: &Loaded) -> Result<serde_json::Value> {
+    let mut fields = serde_json::Map::new();
+    for (key, value) in provenance::flatten(&serde_json::to_value(&loaded.settings)?) {
+        let history = loaded.origins.0.get(&key).cloned().unwrap_or_default();
+        let mut field =
+            serde_json::json!({"value":value,"source":history.last(),"history":history});
+        let resolved = match key.as_str() {
+            "project_root" => Some(loaded.root.clone()),
+            "proto_path" => Some(loaded.settings.proto(&loaded.root)),
+            "server_path" => Some(loaded.settings.server(&loaded.root)),
+            "calc_path" => Some(loaded.settings.calc(&loaded.root)),
+            _ => None,
+        };
+        if let Some(path) = resolved {
+            field["resolved_path"] = serde_json::to_value(&path)?;
+            field["directory_exists"] = path.is_dir().into();
+        }
+        fields.insert(key, field);
+    }
+    Ok(serde_json::json!({"fields":fields,"team_environment":setup::status(loaded)?}))
 }
 pub fn validate(s: &Settings) -> Result<()> {
     if s.developer_name.chars().any(char::is_control) {

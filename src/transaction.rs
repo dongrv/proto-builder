@@ -1,4 +1,8 @@
-use crate::{report::Reporter, util};
+use crate::{
+    agent::{Conflict, OutputConflict},
+    report::Reporter,
+    util,
+};
 use anyhow::{bail, Context, Result};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
@@ -101,6 +105,7 @@ pub fn recover(state: &Path, report: &Reporter) -> Result<()> {
     let journal: Journal = serde_json::from_slice(&fs::read(&path)?)
         .context("[E_RECOVERY] invalid transaction journal")?;
     if journal.phase == "prepared" {
+        report.outputs("recovering", None);
         report.emit(
             "recovery",
             "warning",
@@ -110,6 +115,7 @@ pub fn recover(state: &Path, report: &Reporter) -> Result<()> {
             ),
         );
         rollback(&journal)?;
+        report.outputs("recovered", None);
     } else if journal.phase != "committed" {
         bail!("[E_RECOVERY] invalid journal phase");
     }
@@ -205,17 +211,17 @@ fn commit_impl(
                 match old.files.get(&key) {
                     Some(previous) if *current == previous.sha256 || policy.force => {}
                     Some(_) => {
-                        conflicts.push(format!(
-                            "modified / 用户已修改: {} (use --force)",
-                            output.target.display()
-                        ));
+                        conflicts.push(Conflict {
+                            file: output.target.clone(),
+                            kind: "modified_output",
+                        });
                     }
                     None if policy.adopt_existing => changes.adopted.push(output.target.clone()),
                     None => {
-                        conflicts.push(format!(
-                            "unowned / 尚未接管: {} (review --adopt-existing)",
-                            output.target.display()
-                        ));
+                        conflicts.push(Conflict {
+                            file: output.target.clone(),
+                            kind: "unowned_output",
+                        });
                     }
                 }
                 changes.modified.push(output.target.clone());
@@ -252,10 +258,10 @@ fn commit_impl(
         util::no_symlinks(&item.target)?;
         if item.target.is_file() {
             if util::file_hash(&item.target)? != item.sha256 && !policy.force {
-                conflicts.push(format!(
-                    "modified stale file / 已修改的过期产物: {}",
-                    item.target.display()
-                ));
+                conflicts.push(Conflict {
+                    file: item.target.clone(),
+                    kind: "modified_stale_output",
+                });
             }
             removes.push(item.target.clone());
             changes.removed.push(item.target.clone());
@@ -263,7 +269,7 @@ fn commit_impl(
         next.files.remove(key);
     }
     if !conflicts.is_empty() {
-        bail!("[E_OUTPUT_CONFLICT] output transaction aborted; no generated files changed / 写回已中止:\n{}",conflicts.join("\n"));
+        return Err(OutputConflict(conflicts).into());
     }
     util::check_cancelled()?;
     fs::create_dir_all(state)?;
@@ -301,6 +307,7 @@ fn commit_impl(
     }
     util::write_json(&backup.join("index.json"), &journal)?;
     util::write_json(&state.join("journal.json"), &journal)?;
+    report.outputs("writing", None);
     let apply = (|| -> Result<()> {
         for (index, output) in writes.iter().enumerate() {
             util::check_cancelled()?;
@@ -319,10 +326,22 @@ fn commit_impl(
         Ok(())
     })();
     if let Err(error) = apply {
-        rollback(&journal).with_context(|| format!("[E_COMMIT] {error:#}"))?;
+        if let Err(recovery) = rollback(&journal) {
+            report.outputs("recovery_required", None);
+            return Err(recovery.context(format!("[E_COMMIT] {error:#}")));
+        }
+        report.outputs("rolled_back", Some(false));
         fs::remove_file(state.join("journal.json"))?;
         return Err(error.context("[E_COMMIT] restored original outputs / 已回滚原有产物"));
     }
+    report.outputs(
+        "committed",
+        Some(
+            !changes.added.is_empty()
+                || !changes.modified.is_empty()
+                || !changes.removed.is_empty(),
+        ),
+    );
     fs::remove_file(state.join("journal.json"))?;
     changes.backup = Some(backup);
     report.info(
@@ -383,6 +402,9 @@ mod tests {
         assert_eq!(fs::read_to_string(root.join("a")).unwrap(), "old a");
         assert!(!root.join("b").exists());
         assert!(!root.join("state/manifest.json").exists());
+        let result = report.agent_output(&Ok(root.join("unused-report.json")));
+        assert_eq!(result["output_state"], "rolled_back");
+        assert_eq!(result["generated_files_changed"], false);
     }
     #[test]
     fn edits_require_force_unowned_files_require_adoption_and_partial_preserves_other_scopes() {

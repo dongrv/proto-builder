@@ -4,6 +4,8 @@
 
 `web/` 是网页源文件，构建时通过 `include_str!` 内置产品 EXE；用户无需另行下载网页目录或安装前端依赖。
 
+`.agents/skills/proto-builder/SKILL.md` 是内置 Agent 调用说明，编译 EXE 时需要保留在源码包内；用户可用 `skill --output` 从同一 EXE 导出，无额外运行依赖。Agent 接口协议与软件版本分别管理，规则见 [Agent 接口](AGENT-INTERFACE.md)。
+
 ## 发布身份
 
 官方更新公钥固定在 `assets/update-public-key.hex`，产品编译时内置。已按维护者授权在本机生成 Ed25519 发布密钥，私钥位于仓库外：

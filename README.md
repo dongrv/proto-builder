@@ -52,6 +52,8 @@ proto-builder self-update apply # 下载、验签并更新
 
 ## 详细文档
 
+Codex / Agent 调用（当前源码新增，待发布）：使用 `proto-builder plan --agent`、`proto-builder build --agent` 获取稳定 JSON 摘要，`proto-builder config show --explain --agent` 查看配置来源。[Agent 接口与 Skill 用法](docs/AGENT-INTERFACE.md)。
+
 - [使用与配置详解](docs/USAGE.md)：网页操作、筛选规则、配置优先级、生成物保护、更新与卸载。
 - [SVN 日常操作](docs/SVN-WORKFLOW.md) · [旧工具弃用说明](docs/LEGACY-DEPRECATED.md)
 - [构建、签名与发布](docs/RELEASING.md) · [验收记录](docs/VALIDATION.md) · [第三方许可](docs/THIRD-PARTY-NOTICES.md)
