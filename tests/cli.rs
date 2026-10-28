@@ -13,6 +13,7 @@ fn run_with_env(root: &Path, args: &[&str], environment: &[(&str, String)]) -> O
         .current_dir(root)
         .env("PROTO_BUILDER_HOME", root.join("user-data"))
         .env_remove("ENV_CENTER_PROJECT")
+        .env_remove("ENV_PROJECT")
         .env_remove("ENV_CAL_CENTER_PROJECT")
         .env_remove("ENV_PROTOBUF")
         .env_remove("ENV_DEVELOPER_NAME")
@@ -197,6 +198,11 @@ fn team_environment_and_successful_setup_persistence() {
         calc.to_str().unwrap()
     );
     assert_eq!(shown["result"]["settings"]["developer_name"], "董荣旺");
+    let mut aliased = environment.clone();
+    aliased[1].0 = "ENV_PROJECT";
+    let alias_result = run_with_env(launch, &["config", "show"], &aliased);
+    assert!(alias_result.status.success(), "{}", report(&alias_result));
+    assert_eq!(report(&alias_result)["result"], shown["result"]);
     let overridden = run_with_env(
         launch,
         &[

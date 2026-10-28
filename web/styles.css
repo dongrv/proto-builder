@@ -400,6 +400,28 @@ input:not([type="checkbox"]):disabled {
   width: 100%;
   margin-bottom: 14px;
 }
+.environment-info {
+  margin-top: 14px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+.environment-info summary {
+  color: var(--muted);
+  font-size: 11px;
+}
+.environment-info dl {
+  margin: 10px 0 0;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.environment-info dt {
+  font-family: var(--mono);
+  color: var(--accent);
+}
+.environment-info dd {
+  margin: 3px 0 12px;
+  color: var(--muted);
+}
 .text-button {
   border: 0;
   background: transparent;

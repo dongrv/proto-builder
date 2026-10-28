@@ -28,7 +28,7 @@ proto-builder plan      # 只读预览
 proto-builder build     # 开始编译
 ```
 
-从其他目录启动时，使用 `--repo-root D:\work\project` 指定项目。网页资源内置 EXE，只监听本机；关闭标签页不会停止任务，请点击「关闭工作台」或在启动终端按 Ctrl+C。
+从其他目录启动时，使用 `--repo-root D:\work\go\src\shengyou\docs\branches\beta` 指定协议项目根目录（通常包含 `proto/`）。网页资源内置 EXE，只监听本机；关闭标签页不会停止任务，请点击「关闭工作台」或在启动终端按 Ctrl+C。
 
 ```powershell
 proto-builder build --activity-id 7034,7035

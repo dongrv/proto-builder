@@ -126,7 +126,7 @@ pub fn wizard(
         let values = vec![
             format!(
                 "{}: {}",
-                tr(s, "项目目录", "Project"),
+                tr(s, "协议项目根目录", "Protocol project root"),
                 loaded.root.display()
             ),
             format!(
@@ -277,7 +277,11 @@ pub fn wizard(
             match selected {
                 0 => {
                     if let Some(value) = input(
-                        tr(&loaded.settings, "项目目录", "Project root"),
+                        tr(
+                            &loaded.settings,
+                            "协议项目根目录（通常包含 proto 文件夹）",
+                            "Protocol project root (usually contains proto folder)",
+                        ),
                         &loaded.root.display().to_string(),
                     )? {
                         let root = util::absolute(&std::env::current_dir()?, &PathBuf::from(value));

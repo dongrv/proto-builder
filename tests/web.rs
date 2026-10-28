@@ -17,6 +17,9 @@ struct Web {
 }
 impl Web {
     fn start(root: &Path) -> Self {
+        Self::start_with_env(root, &[])
+    }
+    fn start_with_env(root: &Path, environment: &[(&str, String)]) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_proto-builder"))
             .args(["web", "--no-open", "--non-interactive"])
             .arg("--repo-root")
@@ -24,9 +27,11 @@ impl Web {
             .current_dir(root)
             .env("PROTO_BUILDER_HOME", root.join("user-data"))
             .env_remove("ENV_CENTER_PROJECT")
+            .env_remove("ENV_PROJECT")
             .env_remove("ENV_CAL_CENTER_PROJECT")
             .env_remove("ENV_PROTOBUF")
             .env_remove("ENV_DEVELOPER_NAME")
+            .envs(environment.iter().map(|(key, value)| (*key, value)))
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
             .spawn()
@@ -115,6 +120,37 @@ fn fixture(root: &Path) {
     fs::write(root.join("proto/cmd/common.proto"), "syntax=\"proto3\";\npackage cmd;\noption go_package=\"example/protocol/cmd\";\n// SEQ[100,200]\nmessage HelloReq {string name=1;}\nmessage HelloResp {string value=1;}\n").unwrap();
     fs::write(root.join("proto/act7034/bonus.proto"), "syntax=\"proto3\";\npackage act7034;\noption go_package=\"example/protocol/act7034\";\n// SEQ[300,400]\nmessage BonusReq {}\n").unwrap();
     fs::write(root.join("proto-builder.toml"), "config_version=1\nserver_path='server'\ncalc_path='calc'\n[svn]\nupdate=false\n[update]\nenabled=false\n").unwrap();
+}
+
+#[test]
+fn environment_alias_is_reported_with_its_actual_name_and_value() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    fixture(root);
+    let server = root.join("env-server");
+    let calc = root.join("env-calc");
+    fs::create_dir(&server).unwrap();
+    fs::create_dir(&calc).unwrap();
+    let environment = [
+        ("ENV_PROJECT", server.display().to_string()),
+        ("ENV_CAL_CENTER_PROJECT", calc.display().to_string()),
+        ("ENV_PROTOBUF", root.display().to_string()),
+        ("ENV_DEVELOPER_NAME", "董荣旺".into()),
+    ];
+    let mut web = Web::start_with_env(root, &environment);
+    let state: Value = web.get("/api/state").json().unwrap();
+    assert_eq!(state["setup"]["needs_confirmation"], false);
+    assert_eq!(state["settings"]["server_path"], server.to_str().unwrap());
+    assert_eq!(state["settings"]["calc_path"], calc.to_str().unwrap());
+    assert_eq!(state["settings"]["developer_name"], "董荣旺");
+    let found = state["setup"]["environment"].as_object().unwrap();
+    assert_eq!(found.len(), 4);
+    for (name, value) in environment {
+        assert_eq!(found[name], value);
+    }
+    assert!(!found.contains_key("ENV_CENTER_PROJECT"));
+    assert!(!root.join("user-data/local-setup.json").exists());
+    web.stop();
 }
 
 #[test]

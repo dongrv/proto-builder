@@ -172,7 +172,7 @@ impl State {
             .clone();
         let root = util::absolute(&std::env::current_dir()?, &form.root);
         if util::path_key(&root) != util::path_key(&current.root) {
-            bail!("[E_WEB_CHANGED] 项目目录已改变，请先打开项目 / Open the changed project first");
+            bail!("[E_WEB_CHANGED] 协议项目根目录已改变，请先打开项目 / Open the changed protocol project first");
         }
         if !root.is_dir() {
             bail!(

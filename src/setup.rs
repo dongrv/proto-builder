@@ -9,6 +9,7 @@ pub const TEAM_VARIABLES: [&str; 4] = [
     "ENV_PROTOBUF",
     "ENV_DEVELOPER_NAME",
 ];
+const SERVER_ALIAS: &str = "ENV_PROJECT";
 
 #[derive(Default)]
 pub struct Team {
@@ -18,16 +19,28 @@ pub struct Team {
     pub proto: Option<PathBuf>,
     pub developer: Option<String>,
     pub detected: Vec<String>,
+    pub environment: BTreeMap<String, String>,
     pub issues: Vec<String>,
     pub invalid: bool,
 }
 impl Team {
     pub fn read() -> Self {
-        Self::from_values(&TEAM_VARIABLES.map(|key| env::var(key).ok()))
+        Self::read_with(|key| env::var(key).ok())
     }
-    pub fn from_values(values: &[Option<String>; 4]) -> Self {
+    fn read_with(mut read: impl FnMut(&str) -> Option<String>) -> Self {
+        let mut keys = TEAM_VARIABLES;
+        let mut values = TEAM_VARIABLES.map(&mut read);
+        if values[0].as_deref().is_none_or(|v| v.trim().is_empty()) {
+            if let Some(alias) = read(SERVER_ALIAS).filter(|v| !v.trim().is_empty()) {
+                keys[0] = SERVER_ALIAS;
+                values[0] = Some(alias);
+            }
+        }
+        Self::from_values(&values, &keys)
+    }
+    fn from_values(values: &[Option<String>; 4], keys: &[&str; 4]) -> Self {
         let mut team = Self::default();
-        for (index, key) in TEAM_VARIABLES.iter().enumerate() {
+        for (index, key) in keys.iter().enumerate() {
             let Some(value) = values[index]
                 .as_deref()
                 .map(str::trim)
@@ -46,6 +59,7 @@ impl Team {
                 }
                 team.developer = Some(value.into());
                 team.detected.push((*key).into());
+                team.environment.insert((*key).into(), value.into());
                 continue;
             }
             let path = PathBuf::from(value);
@@ -72,6 +86,7 @@ impl Team {
                 }
             }
             team.detected.push((*key).into());
+            team.environment.insert((*key).into(), value.into());
         }
         team
     }
@@ -124,6 +139,7 @@ pub struct Status {
     pub needs_confirmation: bool,
     pub saved: bool,
     pub detected: Vec<String>,
+    pub environment: BTreeMap<String, String>,
     pub issues: Vec<String>,
     pub paths: Profile,
 }
@@ -142,6 +158,7 @@ pub fn status(loaded: &Loaded) -> Result<Status> {
         needs_confirmation: team.invalid || (!saved && !team.issues.is_empty()),
         saved,
         detected: team.detected,
+        environment: team.environment,
         issues: team.issues,
         paths,
     })
@@ -191,14 +208,17 @@ mod tests {
             Some(root.display().to_string()),
             Some(" 董荣旺 ".into()),
         ];
-        let team = Team::from_values(&values);
+        let team = Team::from_values(&values, &TEAM_VARIABLES);
         assert!(team.issues.is_empty());
         assert_eq!(team.detected.len(), 4);
         assert_eq!(team.root.as_deref(), Some(root));
         assert_eq!(team.proto, Some(root.join("proto")));
         assert_eq!(team.developer.as_deref(), Some("董荣旺"));
         values[2] = Some(root.join("proto").display().to_string());
-        assert_eq!(Team::from_values(&values).root.as_deref(), Some(root));
+        assert_eq!(
+            Team::from_values(&values, &TEAM_VARIABLES).root.as_deref(),
+            Some(root)
+        );
     }
     #[test]
     fn missing_empty_relative_and_invalid_team_values_remain_actionable() {
@@ -209,7 +229,7 @@ mod tests {
             Some("  ".into()),
             Some("bad\nname".into()),
         ];
-        let team = Team::from_values(&values);
+        let team = Team::from_values(&values, &TEAM_VARIABLES);
         assert_eq!(team.issues.len(), 4);
         assert!(team.detected.is_empty());
         assert!(
@@ -218,5 +238,37 @@ mod tests {
                 && team.calc.is_none()
                 && team.developer.is_none()
         );
+    }
+
+    #[test]
+    fn business_server_alias_is_used_only_when_primary_is_unset_or_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = dir.path().join("server");
+        let alias = dir.path().join("alias");
+        fs::create_dir(&server).unwrap();
+        fs::create_dir(&alias).unwrap();
+        for primary in [None, Some("  "), server.to_str(), Some("relative/invalid")] {
+            let team = Team::read_with(|key| match key {
+                "ENV_CENTER_PROJECT" => primary.map(str::to_owned),
+                "ENV_PROJECT" => Some(alias.display().to_string()),
+                _ => None,
+            });
+            match primary {
+                None | Some("  ") => {
+                    assert_eq!(team.server.as_deref(), Some(alias.as_path()));
+                    assert_eq!(team.detected, [SERVER_ALIAS]);
+                    assert_eq!(team.environment[SERVER_ALIAS], alias.display().to_string());
+                }
+                Some("relative/invalid") => {
+                    assert!(team.server.is_none());
+                    assert!(team.invalid);
+                    assert!(team.environment.is_empty());
+                }
+                _ => {
+                    assert_eq!(team.server.as_deref(), Some(server.as_path()));
+                    assert_eq!(team.detected, [TEAM_VARIABLES[0]]);
+                }
+            }
+        }
     }
 }

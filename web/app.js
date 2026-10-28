@@ -16,17 +16,21 @@
     正在读取项目: "Reading project",
     项目与路径: "Project & paths",
     保存配置: "Save configuration",
-    项目目录: "Project directory",
+    协议项目根目录: "Protocol project root",
     打开项目: "Open project",
-    协议目录: "Protocol directory",
+    "Proto 源文件目录": "Proto source directory",
     业务服目录: "Server directory",
     计算服目录: "Calculation server directory",
     开发者名字: "Developer name",
-    "首次使用，请核对项目路径": "First use: check project paths",
-    "部分团队环境变量未设置或无效，请确认下方路径与开发者名字。首次编译成功后自动记住，后续直接复用。":
-      "Some team environment variables are missing or invalid. Check the paths and developer name below. They will be remembered after the first successful build.",
-    "相对路径以项目目录为起点。路径和名字在编译成功后自动记住，其他设置可另存配置。":
-      "Relative paths start at the project directory. Paths and name are remembered after a successful build; save other settings as configuration.",
+    请核对项目路径与环境变量: "Check project paths and environment variables",
+    "团队配置缺失、无效或路径存在冲突，请核对下方信息。路径和名字会在编译成功后自动记住。":
+      "Team configuration is missing, invalid or has conflicting paths. Check the details below. Paths and name are remembered after a successful build.",
+    "协议仓库的根目录，对应 ENV_PROTOBUF，通常包含 proto 文件夹。业务服与计算服的 Go 工程路径分别填写在下方。":
+      "The protocol repository root, corresponding to ENV_PROTOBUF, usually contains a proto folder. Enter the Go server project paths separately below.",
+    "Proto 源文件目录通常为根目录下的 proto。相对路径以协议项目根目录为起点；路径和名字在编译成功后记住。":
+      "Proto sources usually live in the root's proto folder. Relative paths start at the protocol project root; paths and name are remembered after a successful build.",
+    "以下是启动时从当前进程读取的环境变量；上方手动输入优先。修改 Windows 环境变量后，请重新启动终端或启动本工具的应用。":
+      "These environment variables were read from the current process at startup. Manual inputs above take priority. After changing Windows environment variables, restart the terminal or application that launches this tool.",
     选择协议: "Select protocols",
     重置筛选: "Reset filters",
     "活动 ID": "Activity IDs",
@@ -149,7 +153,7 @@
     筛选当前目录中的文件夹: "Filter subdirectories",
     "服务连接失败，请检查终端，并用终端中的完整地址重新打开网页。":
       "Connection failed. Check the terminal and reopen its complete URL.",
-    选择项目目录: "Choose project directory",
+    选择协议项目根目录: "Choose protocol project root",
     选择协议目录: "Choose protocol directory",
     选择业务服目录: "Choose server directory",
     选择计算服目录: "Choose calculation server directory",
@@ -302,6 +306,17 @@
     $("setup-notice").hidden = !setup?.needs_confirmation;
     $("setup-issues").replaceChildren(
       ...(setup?.issues || []).map((issue) => node("li", issue)),
+    );
+    const environment = Object.entries(setup?.environment || {});
+    $("environment-summary").textContent = localized(
+      `环境变量识别 · 已读取 ${environment.length} 项`,
+      `Environment variables · ${environment.length} read`,
+    );
+    $("environment-values").replaceChildren(
+      ...environment.flatMap(([name, value]) => [
+        node("dt", name),
+        node("dd", value),
+      ]),
     );
   }
   function fill(data) {
