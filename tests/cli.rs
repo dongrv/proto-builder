@@ -400,7 +400,7 @@ fn unknown_config_key_and_missing_match_fail_before_any_output() {
 }
 #[test]
 #[cfg(all(windows, target_arch = "x86_64"))]
-fn native_build_protects_edits_rolls_back_and_cleans_only_owned_stale_files() {
+fn native_build_replaces_go_backs_up_and_cleans_only_owned_stale_files() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     fixture(root);
@@ -425,18 +425,31 @@ fn native_build_protects_edits_rolls_back_and_cleans_only_owned_stale_files() {
         .unwrap()
         .replace("string name=1;", "string name=1;int32 age=2;");
     fs::write(&input, text).unwrap();
-    let before = tree(&root.join("server"));
-    let conflict = run(root, &["build"]);
-    assert_eq!(conflict.status.code(), Some(7), "{}", report(&conflict));
-    assert_eq!(before, tree(&root.join("server")));
-    assert_eq!(fs::read(&go).unwrap(), edited);
-    let forced = run(root, &["build", "--force"]);
+    let grpc_original = fs::read(&rpc).unwrap();
+    fs::write(&rpc, b"edited grpc output").unwrap();
+    let forced = run(root, &["build"]);
     assert!(forced.status.success(), "{}", report(&forced));
     let backup = report(&forced)["result"]["changes"]["backup"]
         .as_str()
         .unwrap()
         .to_owned();
     assert!(Path::new(&backup).join("index.json").is_file());
+    assert_ne!(fs::read(&go).unwrap(), edited);
+    assert_eq!(fs::read(&rpc).unwrap(), grpc_original);
+    let journal: serde_json::Value =
+        serde_json::from_slice(&fs::read(Path::new(&backup).join("index.json")).unwrap()).unwrap();
+    for (target, bytes) in [
+        (&go, edited.as_slice()),
+        (&rpc, b"edited grpc output".as_slice()),
+    ] {
+        let saved = journal["operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|op| Path::new(op["target"].as_str().unwrap()) == target)
+            .unwrap();
+        assert_eq!(fs::read(saved["backup"].as_str().unwrap()).unwrap(), bytes);
+    }
     let server_before = tree(&root.join("server"));
     let calc_before = tree(&root.join("calc"));
     fs::write(&input, "syntax=\"proto3\";\npackage cmd;\ninvalid syntax\n").unwrap();

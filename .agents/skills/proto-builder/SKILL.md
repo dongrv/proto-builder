@@ -35,7 +35,7 @@ The example root must be replaced with the verified project, and IDs must reflec
 - Empty activity or machine selection means all. Multiple IDs within a type form a union. Selecting both activity and machine types intersects their constraints; unrelated IDs can therefore match nothing. Shared protocols remain included.
 - Go generation follows the selected scope. Shared HTML/Markdown and protocol ID JSON retain the full applicable protocol collection; explicit exclusions still apply. Local Go compilation must not silently narrow shared documentation.
 - Builds update SVN by default when configured, preserve local modifications according to SVN behavior, and abort on conflicts. Do not add `--no-svn-update` in response to a failure unless the user's instructions authorize changing that behavior.
-- Existing generated files remain protected. Do not automatically retry with `--force` or `--adopt-existing`; inspect the listed conflicts and apply those options only within the user's authorized overwrite or migration scope. Never repair `.pb.go` directly to hide a protobuf source error.
+- Generated `.pb.go` files, including gRPC files, replace differing existing copies by default after backing them up, even when previously untracked or edited by hand. Other generated formats and modified stale files remain protected. Do not automatically retry their conflicts with `--force` or `--adopt-existing`; inspect the files and the user's authorized scope. Never repair `.pb.go` directly to hide a protobuf source error.
 - Do not commit SVN changes or install/update the tool as part of a protocol build unless requested.
 
 ## Interpret results

@@ -96,13 +96,13 @@ pub struct Options {
     #[arg(
         long,
         global = true,
-        help = "显式覆盖已登记且被修改的生成物，并保留备份 / Replace modified owned outputs"
+        help = "备份后覆盖已修改的其他生成物或清理已修改的过期产物；pb.go 默认覆盖 / Replace other modified outputs with backups"
     )]
     pub force: bool,
     #[arg(
         long,
         global = true,
-        help = "首次迁移时显式接管已有生成物并备份 / Adopt existing generated files with backups"
+        help = "备份后接管其他已有生成物；pb.go 默认接管并覆盖 / Adopt other existing outputs with backups"
     )]
     pub adopt_existing: bool,
     #[arg(long, global = true, value_name = "N")]

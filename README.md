@@ -4,14 +4,14 @@
 
 - **网页工作台**：鼠标选择目录、活动 / 机器 ID、排除项，预览计划、编译、查看日志与保存配置。
 - **终端与命令行**：键盘向导不捕获鼠标；命令行适合快速执行和重复操作。
-- **可靠生成**：失败不部署，保护已有文件，提供备份、恢复及明确的文件 / 行号诊断。
+- **可靠生成**：失败不部署，pb.go 默认备份后更新，其他生成物保留覆盖保护，提供恢复及文件 / 行号诊断。
 
 ## 安装
 
-从 [v1.1.0 Release](https://github.com/dongrv/proto-builder/releases/tag/v1.1.0) 下载 Windows EXE，在 PowerShell 执行：
+从 [v1.2.0 Release](https://github.com/dongrv/proto-builder/releases/tag/v1.2.0) 下载 Windows EXE，在 PowerShell 执行：
 
 ```powershell
-.\proto-builder-1.1.0-windows-x86_64.exe install
+.\proto-builder-1.2.0-windows-x86_64.exe install
 ```
 
 默认安装到 `%LOCALAPPDATA%\ProtoBuilder\bin` 并添加用户 PATH。**新开终端**后即可使用，也可直接运行下载的 EXE。
@@ -52,7 +52,7 @@ proto-builder self-update apply # 下载、验签并更新
 
 ## 详细文档
 
-Codex / Agent 调用（当前源码新增，待发布）：使用 `proto-builder plan --agent`、`proto-builder build --agent` 获取稳定 JSON 摘要，`proto-builder config show --explain --agent` 查看配置来源。[Agent 接口与 Skill 用法](docs/AGENT-INTERFACE.md)。
+Codex / Agent 调用：使用 `proto-builder plan --agent`、`proto-builder build --agent` 获取稳定 JSON 摘要，`proto-builder config show --explain --agent` 查看配置来源。[Agent 接口与 Skill 用法](docs/AGENT-INTERFACE.md) · [v1.2.0 更新说明](docs/RELEASE-1.2.0.md)。
 
 - [使用与配置详解](docs/USAGE.md)：网页操作、筛选规则、配置优先级、生成物保护、更新与卸载。
 - [SVN 日常操作](docs/SVN-WORKFLOW.md) · [旧工具弃用说明](docs/LEGACY-DEPRECATED.md)

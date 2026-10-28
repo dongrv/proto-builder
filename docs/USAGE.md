@@ -11,7 +11,7 @@
 从 [GitHub Releases](https://github.com/dongrv/proto-builder/releases) 下载发布的 Windows x86_64 EXE。发布文件名包含版本号，下载后直接执行安装：
 
 ```powershell
-.\proto-builder-1.1.0-windows-x86_64.exe install
+.\proto-builder-1.2.0-windows-x86_64.exe install
 ```
 
 默认安装到 `%LOCALAPPDATA%\ProtoBuilder\bin` 并注册用户 PATH；新开终端即可使用。也可直接运行下载的程序，或用 `install --dir D:\DevTools\ProtoBuilder` 自选安装目录。`install --system` 使用 Program Files 和系统 PATH，需要管理员终端。
@@ -73,10 +73,11 @@ proto-builder build --dry-run
 proto-builder build --no-svn-update --no-docs --no-copy
 proto-builder build --no-config
 
-# 首次接管已有且与新产物不同的生成文件：明确授权并保留备份
+# pb.go 默认备份后以本次生成结果覆盖，无需额外参数
+# 首次接管其他已有且内容不同的生成物（HTML / Markdown / JSON 等）
 proto-builder build --adopt-existing
 
-# 已登记的生成物被手动修改：默认报冲突；确认覆盖时先备份
+# 其他已登记生成物或过期产物被手动修改：确认替换或清理，先备份
 proto-builder build --force
 
 # 可复现的机器输出
@@ -139,7 +140,11 @@ proto-builder --config D:\Configs\project.toml plan
 
 所有生成结果先放临时目录；任意生成步骤失败均不部署。写回使用持久化操作日志、完整备份和单文件原子替换，写回错误自动恢复，意外中断后下一次构建先恢复。跨多个目录的文件替换不是操作系统级的全局原子事务；备份与恢复日志保障可恢复性。
 
-工具仅清理已登记、属于本次构建范围且已过时的生成文件。选择性构建保留未选目录；`--no-copy` 保留计算服产物；无关手写文件保留。首次遇到完全相同的既有文件可直接登记；首次遇到内容不同的文件需要 `--adopt-existing`，之后手动修改已登记文件需要 `--force`。这两种情况都会保存被替换内容。
+工具仅清理已登记、属于本次构建范围且已过时的生成文件。选择性构建保留未选目录；`--no-copy` 保留计算服产物；无关手写文件保留。
+
+`.pb.go`（含 `_grpc.pb.go`）默认以本次协议生成结果为准：已有内容相同则不写入，不同则先备份原文件再覆盖，未登记或被手动修改也适用。工具不会比较文件修改时间来决定版本；需要保留的手写逻辑应放在独立 Go 文件中。
+
+HTML、Markdown、JSON 等其他生成物继续保护：完全相同的文件可直接登记，未登记且内容不同需要 `--adopt-existing`，已登记又被修改需要 `--force`。已过时但被修改的产物也需 `--force` 才能备份后清理。网页中两项选项尾部的问号可展开具体步骤、适用范围和备份定位方法；备份目录及 `index.json` 会在编译结果中给出。
 
 运行结束打印真实的新增、修改、未变、清理和接管计数。错误保留原始 protoc 诊断及文件、行、列，并明确中断。Ctrl+C 取消当前构建及工具子进程树。默认报告保存在用户数据目录的 `logs`；JSON 包含配置来源、工具链、SVN、阶段、耗时、筛选、输出哈希、变更和诊断。默认保留 20 次报告，同时限制日志总量。
 

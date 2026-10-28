@@ -154,6 +154,11 @@ pub struct Policy<'a> {
     pub full_calc: bool,
     pub roots: &'a [PathBuf],
 }
+pub fn replaces_generated_go(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(".pb.go"))
+}
 pub fn commit(
     state: &Path,
     outputs: &[Output],
@@ -209,14 +214,19 @@ fn commit_impl(
             Some(current) if *current == generated => changes.unchanged.push(output.target.clone()),
             Some(current) => {
                 match old.files.get(&key) {
-                    Some(previous) if *current == previous.sha256 || policy.force => {}
+                    Some(previous)
+                        if *current == previous.sha256
+                            || policy.force
+                            || replaces_generated_go(&output.target) => {}
                     Some(_) => {
                         conflicts.push(Conflict {
                             file: output.target.clone(),
                             kind: "modified_output",
                         });
                     }
-                    None if policy.adopt_existing => changes.adopted.push(output.target.clone()),
+                    None if policy.adopt_existing || replaces_generated_go(&output.target) => {
+                        changes.adopted.push(output.target.clone())
+                    }
                     None => {
                         conflicts.push(Conflict {
                             file: output.target.clone(),

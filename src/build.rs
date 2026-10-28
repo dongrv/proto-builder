@@ -66,12 +66,25 @@ pub fn plan(loaded: &Loaded, report: &Reporter) -> Result<()> {
         &loaded.settings.calc(&loaded.root),
     )?;
     let manifest = transaction::read_manifest(&state)?;
+    let mut overwrite_targets = BTreeSet::new();
+    for relative in p
+        .outputs
+        .iter()
+        .filter_map(|path| path.strip_prefix("server/protocol/"))
+    {
+        overwrite_targets.insert(util::path_key(&server.join(relative)));
+        if loaded.settings.copy_to_calc && calc_eligible(Path::new(relative)) {
+            overwrite_targets.insert(util::path_key(&calc.join(relative)));
+        }
+    }
     for item in manifest.files.values() {
         if item.target.is_file() && util::file_hash(&item.target)? != item.sha256 {
+            let overwrite = transaction::replaces_generated_go(&item.target)
+                && overwrite_targets.contains(&util::path_key(&item.target));
             report.emit(
-                "conflict",
-                "warning",
-                format!("{} (modified)", item.target.display()),
+                if overwrite { "overwrite" } else { "conflict" },
+                if overwrite { "info" } else { "warning" },
+                format!("{} ({})", item.target.display(), if overwrite { "modified; differing generated Go will replace it after backup / 若生成结果不同，将备份后覆盖" } else { "modified / 已修改" }),
             );
         }
     }

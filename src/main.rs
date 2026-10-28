@@ -221,7 +221,7 @@ fn execute(cli: &Cli, report: &Reporter) -> Result<()> {
     report.context(
         serde_json::json!({"project_root":loaded.root,"proto_root":loaded.settings.proto(&loaded.root),"server_root":loaded.settings.server(&loaded.root),"calc_root":loaded.settings.calc(&loaded.root),"configuration_sources":loaded.sources,
             "selection":{"activity_ids":loaded.settings.activity_ids,"machine_ids":loaded.settings.machine_ids,"assign_id":loaded.settings.assign_id,"excludes":loaded.settings.excludes},
-            "policy":{"svn_update":loaded.settings.svn.update,"docs":loaded.settings.docs,"protocol_config":loaded.settings.protocol_config,"copy_to_calc":loaded.settings.copy_to_calc,"force":cli.options.force,"adopt_existing":cli.options.adopt_existing,"toolchain_mode":loaded.settings.toolchain.mode}}),
+            "policy":{"svn_update":loaded.settings.svn.update,"docs":loaded.settings.docs,"protocol_config":loaded.settings.protocol_config,"copy_to_calc":loaded.settings.copy_to_calc,"protobuf_overwrite":"generated_with_backup","force":cli.options.force,"adopt_existing":cli.options.adopt_existing,"toolchain_mode":loaded.settings.toolchain.mode}}),
     );
     if let Some(Cmd::Web { port, no_open }) = &cli.command {
         return web::run(loaded, &cli.options, *port, !*no_open, report);

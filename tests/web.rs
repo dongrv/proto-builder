@@ -359,6 +359,12 @@ fn web_build_errors_keep_outputs_and_cancel_releases_the_session() {
     assert_eq!(success["status"], "success", "{success}");
     let go = root.join("server/protocol/cmd/common.pb.go");
     let original = fs::read(&go).unwrap();
+    fs::write(&go, b"manually edited generated Go").unwrap();
+    let rebuilt = web.start_job("build", &form);
+    let replaced = web.wait(&rebuilt);
+    assert_eq!(replaced["status"], "success", "{replaced}");
+    assert_eq!(fs::read(&go).unwrap(), original);
+    assert!(replaced["result"]["changes"]["backup"].is_string());
     let input = root.join("proto/cmd/common.proto");
     fs::write(&input, "syntax=\"proto3\";\npackage cmd;\noption go_package=\"example/protocol/cmd\";\nmessage HelloReq { invalid_syntax }\n").unwrap();
     let failed = web.start_job("build", &form);

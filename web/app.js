@@ -55,6 +55,18 @@
       "Adopt existing outputs, with a backup before replacement",
     "覆盖已手动修改的生成物，覆盖前备份":
       "Replace manually edited outputs, with a backup",
+    "pb.go 默认以本次生成结果覆盖，覆盖前自动备份；以下选项用于其他生成物及过期文件。":
+      "pb.go files use the new generated result by default, with a backup before replacement. These options apply to other outputs and stale files.",
+    接管已有生成物的操作说明: "How to adopt existing outputs",
+    覆盖手动修改生成物的操作说明: "How to replace manually edited outputs",
+    "用于首次迁移：勾选后，已有但尚未登记的 HTML、Markdown、JSON 等生成物与本次结果不同时，先备份原文件，再覆盖并登记；未勾选则遇到此类差异时中止。":
+      "For first-time migration: when checked, existing untracked HTML, Markdown, JSON and other outputs that differ are backed up, replaced and registered. Otherwise, differences stop the build.",
+    "pb.go 无需勾选，默认备份后覆盖。操作步骤：核对项目路径和编译范围，按需勾选，再点击「开始编译」。完成后从结果中的备份目录及 index.json 查找原文件。":
+      "pb.go files are backed up and replaced by default. Check the project paths and build scope, select this option if needed, then click Build protocols. Find original files using the backup directory and index.json shown in the results.",
+    "用于已经登记后又被手动修改的其他生成物：勾选后，先备份，再以本次生成结果覆盖；本次范围内已过时且被修改的产物也会备份后清理。未勾选则中止并列出冲突文件。":
+      "For other registered outputs edited by hand: when checked, back up and replace them with the generated result. Modified stale outputs in this scope are also backed up and removed. Otherwise, stop and list conflicting files.",
+    "仍有对应协议的 pb.go 默认备份后覆盖，无需勾选。此选项不会跳过 SVN 冲突、扩大编译范围或删除未登记文件。需要保留手写逻辑时，请放到独立的 Go 文件中。":
+      "pb.go files with corresponding protocols are backed up and replaced by default. This option does not bypass SVN conflicts, expand the build scope or remove untracked files. Keep handwritten logic in separate Go files.",
     预览计划: "Preview plan",
     开始编译: "Build protocols",
     检查环境: "Check environment",
@@ -190,7 +202,9 @@
   );
   let language = "zh-CN";
   const t = (text) =>
-    language === "en-US" ? translations[text] || text : text;
+    language === "en-US"
+      ? translations[text.replace(/\s+/g, " ").trim()] || text
+      : text;
   const localized = (zh, en) => (language === "en-US" ? en : zh);
   const number = (value) => Number(value || 0).toLocaleString(language);
   const state = {

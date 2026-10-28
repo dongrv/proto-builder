@@ -192,7 +192,7 @@ fn plan_is_compact_and_never_updates_svn_or_writes_generated_files() {
 }
 
 #[test]
-fn build_reports_real_changes_and_protects_modified_outputs() {
+fn build_replaces_modified_go_by_default_and_preserves_backup() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     fixture(root);
@@ -208,21 +208,29 @@ fn build_reports_real_changes_and_protects_modified_outputs() {
     assert_eq!(repeat["result"]["changes"]["unchanged"], 1);
     assert_eq!(repeat["generated_files_changed"], false);
     let target = root.join("server/protocol/cmd/example.pb.go");
+    let generated = fs::read(&target).unwrap();
     let mut edited = fs::read(&target).unwrap();
     edited.extend_from_slice(b"// developer edit\n");
     fs::write(&target, &edited).unwrap();
-    let (output, blocked) = run(root, &["build"], &[]);
-    assert_eq!(output.status.code(), Some(7), "{blocked}");
-    assert_eq!(blocked["status"], "blocked");
-    assert_eq!(blocked["error"]["kind"], "modified_output");
-    assert_eq!(blocked["error"]["retryable"], false);
-    assert_eq!(blocked["error"]["files"].as_array().unwrap().len(), 1);
+    let (output, replaced) = run(root, &["build"], &[]);
+    assert!(output.status.success(), "{replaced}");
+    assert_eq!(replaced["generated_files_changed"], true);
+    assert_eq!(replaced["result"]["changes"]["modified"], 1);
     assert_eq!(
-        Path::new(blocked["error"]["files"][0].as_str().unwrap()),
-        target
+        replaced["policy"]["protobuf_overwrite"],
+        "generated_with_backup"
     );
-    assert_eq!(blocked["generated_files_changed"], false);
-    assert_eq!(fs::read(&target).unwrap(), edited);
+    assert_eq!(fs::read(&target).unwrap(), generated);
+    let backup = Path::new(replaced["result"]["backup"].as_str().unwrap());
+    let journal: Value =
+        serde_json::from_slice(&fs::read(backup.join("index.json")).unwrap()).unwrap();
+    let saved = journal["operations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|op| Path::new(op["target"].as_str().unwrap()) == target)
+        .unwrap();
+    assert_eq!(fs::read(saved["backup"].as_str().unwrap()).unwrap(), edited);
     let (_, shown) = run(root, &["config", "show", "--explain"], &[]);
     assert_eq!(
         shown["result"]["explanation"]["fields"]["server_path"]["source"]["kind"],
@@ -231,7 +239,7 @@ fn build_reports_real_changes_and_protects_modified_outputs() {
 }
 
 #[test]
-fn conflicts_are_bounded_and_complete_evidence_is_retained() {
+fn stale_conflicts_are_bounded_and_complete_evidence_is_retained() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     fixture(root);
@@ -244,9 +252,21 @@ fn conflicts_are_bounded_and_complete_evidence_is_retained() {
         )
         .unwrap();
     }
+    let (output, adopted) = run(root, &["build"], &[]);
+    assert!(output.status.success(), "{adopted}");
+    assert_eq!(adopted["result"]["changes"]["adopted"], 25);
+    for index in 0..25 {
+        fs::remove_file(root.join(format!("proto/cmd/module{index}.proto"))).unwrap();
+        fs::write(
+            root.join(format!("server/protocol/cmd/module{index}.pb.go")),
+            "edited stale output",
+        )
+        .unwrap();
+    }
+    let generated = fs::read(root.join("server/protocol/cmd/example.pb.go")).unwrap();
     let (output, value) = run(root, &["build"], &[]);
     assert_eq!(output.status.code(), Some(7), "{value}");
-    assert_eq!(value["error"]["kind"], "unowned_output");
+    assert_eq!(value["error"]["kind"], "modified_stale_output");
     assert_eq!(value["error"]["conflict_count"], 25);
     assert_eq!(value["error"]["conflicts"].as_array().unwrap().len(), 20);
     assert_eq!(value["error"]["file_count"], 25);
@@ -258,12 +278,51 @@ fn conflicts_are_bounded_and_complete_evidence_is_retained() {
         25
     );
     assert_eq!(value["generated_files_changed"], false);
-    assert!(!root.join("server/protocol/cmd/example.pb.go").exists());
+    assert_eq!(
+        fs::read(root.join("server/protocol/cmd/example.pb.go")).unwrap(),
+        generated
+    );
     assert_eq!(
         fs::read_to_string(root.join("server/protocol/cmd/module24.pb.go")).unwrap(),
-        "existing generated file"
+        "edited stale output"
     );
-    assert!(!root.join("user-data/local-setup.json").exists());
+}
+
+#[test]
+fn other_outputs_still_require_explicit_adoption_and_replacement() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    fixture(root);
+    fs::write(
+        root.join("proto-builder.toml"),
+        fs::read_to_string(root.join("proto-builder.toml"))
+            .unwrap()
+            .replace("docs=false", "docs=true"),
+    )
+    .unwrap();
+    let html = root.join("proto/protocol.html");
+    fs::write(&html, "existing documentation").unwrap();
+    let (output, blocked) = run(root, &["build"], &[]);
+    assert_eq!(output.status.code(), Some(7), "{blocked}");
+    assert_eq!(blocked["error"]["kind"], "unowned_output");
+    assert_eq!(fs::read_to_string(&html).unwrap(), "existing documentation");
+    assert!(!root.join("server/protocol/cmd/example.pb.go").exists());
+    let (output, adopted) = run(root, &["build", "--adopt-existing"], &[]);
+    assert!(output.status.success(), "{adopted}");
+    fs::write(&html, "manually edited documentation").unwrap();
+    let (output, blocked) = run(root, &["build"], &[]);
+    assert_eq!(output.status.code(), Some(7), "{blocked}");
+    assert_eq!(blocked["error"]["kind"], "modified_output");
+    assert_eq!(
+        fs::read_to_string(&html).unwrap(),
+        "manually edited documentation"
+    );
+    let (output, replaced) = run(root, &["build", "--force"], &[]);
+    assert!(output.status.success(), "{replaced}");
+    assert_ne!(
+        fs::read_to_string(&html).unwrap(),
+        "manually edited documentation"
+    );
 }
 
 #[test]

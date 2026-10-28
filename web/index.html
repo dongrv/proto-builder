@@ -340,16 +340,58 @@
                     </div>
                   </div>
                   <div class="sensitive-options">
-                    <label class="check-line"
-                      ><input type="checkbox" id="adopt-existing" /><span
-                        data-i18n
-                        >接管已有生成物，覆盖前备份</span
-                      ></label
-                    ><label class="check-line"
-                      ><input type="checkbox" id="force" /><span data-i18n
-                        >覆盖已手动修改的生成物，覆盖前备份</span
-                      ></label
-                    >
+                    <p class="field-note" data-i18n>
+                      pb.go
+                      默认以本次生成结果覆盖，覆盖前自动备份；以下选项用于其他生成物及过期文件。
+                    </p>
+                    <div class="option-row">
+                      <label class="check-line"
+                        ><input type="checkbox" id="adopt-existing" /><span
+                          data-i18n
+                          >接管已有生成物，覆盖前备份</span
+                        ></label
+                      >
+                      <details class="option-help" id="adopt-help">
+                        <summary aria-label="接管已有生成物的操作说明">
+                          ?
+                        </summary>
+                        <div class="option-help-content">
+                          <p data-i18n>
+                            用于首次迁移：勾选后，已有但尚未登记的
+                            HTML、Markdown、JSON
+                            等生成物与本次结果不同时，先备份原文件，再覆盖并登记；未勾选则遇到此类差异时中止。
+                          </p>
+                          <p data-i18n>
+                            pb.go
+                            无需勾选，默认备份后覆盖。操作步骤：核对项目路径和编译范围，按需勾选，再点击「开始编译」。完成后从结果中的备份目录及
+                            index.json 查找原文件。
+                          </p>
+                        </div>
+                      </details>
+                    </div>
+                    <div class="option-row">
+                      <label class="check-line"
+                        ><input type="checkbox" id="force" /><span data-i18n
+                          >覆盖已手动修改的生成物，覆盖前备份</span
+                        ></label
+                      >
+                      <details class="option-help" id="force-help">
+                        <summary aria-label="覆盖手动修改生成物的操作说明">
+                          ?
+                        </summary>
+                        <div class="option-help-content">
+                          <p data-i18n>
+                            用于已经登记后又被手动修改的其他生成物：勾选后，先备份，再以本次生成结果覆盖；本次范围内已过时且被修改的产物也会备份后清理。未勾选则中止并列出冲突文件。
+                          </p>
+                          <p data-i18n>
+                            仍有对应协议的 pb.go
+                            默认备份后覆盖，无需勾选。此选项不会跳过 SVN
+                            冲突、扩大编译范围或删除未登记文件。需要保留手写逻辑时，请放到独立的
+                            Go 文件中。
+                          </p>
+                        </div>
+                      </details>
+                    </div>
                   </div>
                 </details>
               </section>
