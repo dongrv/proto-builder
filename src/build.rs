@@ -233,18 +233,25 @@ pub fn run(loaded: &Loaded, options: &Options, report: &Reporter) -> Result<()> 
     if s.docs {
         let docs = workspace.path().join("docs");
         fs::create_dir(&docs)?;
-        let doc_inputs = p
-            .selected
-            .iter()
-            .filter(|i| !i.grpc)
-            .map(|i| i.relative.clone())
-            .collect::<Vec<_>>();
+        // Shared documents describe the project, independently of Go ID selection.
+        let doc_inputs = &p.documentation_inputs;
         if !doc_inputs.is_empty() {
+            report.info(
+                "docs",
+                format!(
+                    "{}: {}",
+                    report.text(
+                        "生成完整共享文档（不受 ID 筛选影响；应用排除项）",
+                        "Generating complete shared documents (independent of ID filters; exclusions apply)",
+                    ),
+                    doc_inputs.len()
+                ),
+            );
             for format in ["markdown,protocol.md", "html,protocol.html"] {
                 let mut command = Command::new(tools.get("protoc")?);
                 command
                     .current_dir(&input_proto)
-                    .args(&doc_inputs)
+                    .args(doc_inputs)
                     .arg("-I")
                     .arg(".")
                     .arg(format!(
@@ -385,7 +392,7 @@ pub fn run(loaded: &Loaded, options: &Options, report: &Reporter) -> Result<()> 
             Ok(json!({"target":o.target,"sha256":util::file_hash(&o.source)?,"scope":o.scope}))
         })
         .collect::<Result<Vec<_>>>()?;
-    report.result(json!({"proto_files":p.selected.len(),"groups":p.groups.len(),"commands":commands.load(Ordering::Relaxed),"changes":changes,"outputs":hashes,"legacy_baseline":"not-run-at-runtime"}));
+    report.result(json!({"proto_files":p.selected.len(),"documentation_proto_files":p.documentation_inputs.len(),"groups":p.groups.len(),"commands":commands.load(Ordering::Relaxed),"changes":changes,"outputs":hashes,"legacy_baseline":"not-run-at-runtime"}));
     Ok(())
 }
 fn protoc(

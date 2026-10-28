@@ -116,7 +116,7 @@ proto-builder --config D:\Configs\project.toml plan
 
 固定工具链来自当前项目原始四个 EXE，版本和哈希记录在 `assets/windows-x86_64/manifest.json`：protoc 3.15.7、protoc-gen-go 1.27.1、protoc-gen-go-grpc 1.2.0、protoc-gen-doc 1.5.0。默认不会静默回退到 PATH 或仓库 bin；显式启用外部工具链时记录路径、版本和 SHA256，产物不再保证与内置版本相同。
 
-生成遵循当前项目规则：Go 使用原插件选项；RPC 按原规则生成 gRPC；Markdown 和 HTML 使用选中的非 RPC 协议。协议号配置扫描整个协议集（应用排除规则），保持原脚本的编号、字段顺序、CRLF 和 JSON 序列化行为。**ID 筛选不缩减全局 ProtoConfig.json**，这是原有行为。生成的协议配置部署到业务服 `configs/{fatcat,reels,thunder}/sys`；计算服同步保留当前项目原有目录规则。
+生成遵循当前项目规则：Go 使用原插件选项；RPC 按原规则生成 gRPC；**共享的 protocol.md / protocol.html 始终使用完整的非 RPC 协议集（应用显式排除项），不受活动 ID、机器 ID 或 assign-id 筛选影响。** 局部编译只缩小 Go 生成范围，不会删掉共享文档中的未选模块。文档内任意协议生成失败时，本次构建整体不写回；需要只生成局部 Go 文件时可关闭文档。协议号配置扫描整个协议集（应用排除规则），保持原脚本的编号、字段顺序、CRLF 和 JSON 序列化行为。**ID 筛选不缩减全局 ProtoConfig.json**，这是原有行为。生成的协议配置部署到业务服 `configs/{fatcat,reels,thunder}/sys`；计算服同步保留当前项目原有目录规则。
 
 执行流程：取得相关输出目录锁 → SVN 更新和冲突检查 → 输入快照 → 有界并行生成 → 校验 → 统一写回。`jobs = 0` 使用可用 CPU 数减一、至少一个工作线程。相同项目或相同目标目录的并发构建会失败并提示等待；不同独立项目可并行。
 
@@ -146,7 +146,7 @@ proto-builder uninstall
 
 ## 验证与开发
 
-原工具仅用于内部基准采样和迁移初期对比，产品代码从不调用旧脚本。内部样本保存在用户数据目录的 `baselines`，不纳入项目或发行包。已验证全量和 7034、6034 两个旧 ID 场景，业务服、计算服、文档及协议 JSON 均逐字节一致。
+原工具仅用于内部基准采样和迁移初期对比，产品代码从不调用旧脚本。内部样本保存在用户数据目录的 `baselines`，不纳入项目或发行包。初始版本已验证全量和 7034、6034 两个旧 ID 场景的字节基准。当前共享文档采用完整协议集：全量文档沿用固定插件及原参数；局部构建的文档范围按新的完整文档规则验收，Go 和协议 JSON 的生成规则保持一致。
 
 ```powershell
 cargo fmt --check

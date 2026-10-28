@@ -15,6 +15,7 @@
   --accent-ink: #211711;
   --soft-accent: #33271f;
   --good: #a3b59a;
+  --success-bg: #242d23;
   --serif:
     Georgia, "Palatino Linotype", "Noto Serif SC", "Songti SC", SimSun, serif;
   --sans: "Segoe UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
@@ -36,6 +37,7 @@
   --accent-ink: #fffaf2;
   --soft-accent: #f1e3d9;
   --good: #526b4d;
+  --success-bg: #edf2e8;
 }
 * {
   box-sizing: border-box;
@@ -664,6 +666,40 @@ input[type="checkbox"] {
 }
 .run-state[data-state="cancelled"] .status-dot {
   background: var(--faint);
+}
+.run-state[data-state="success"] {
+  color: var(--good);
+  font-size: 12px;
+  font-weight: 600;
+}
+.completion-box {
+  display: flex;
+  flex-shrink: 0;
+  align-items: flex-start;
+  gap: 14px;
+  margin: 16px 20px 4px;
+  padding: 18px;
+  border: 1px solid var(--good);
+  border-left-width: 4px;
+  border-radius: 6px;
+  background: var(--success-bg);
+}
+.completion-mark {
+  color: var(--good);
+  font-size: 26px;
+  line-height: 1.2;
+}
+.completion-box h3 {
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.4;
+  color: var(--good);
+}
+.completion-box p {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--ink);
+  overflow-wrap: anywhere;
 }
 .output-tabs {
   display: flex;

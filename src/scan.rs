@@ -27,6 +27,7 @@ pub struct Skipped {
 #[derive(Debug, Serialize)]
 pub struct Plan {
     pub scanned: usize,
+    pub documentation_inputs: Vec<String>,
     pub selected: Vec<Input>,
     pub excluded: Vec<Skipped>,
     pub filtered: Vec<Skipped>,
@@ -206,6 +207,16 @@ pub fn make(root: &Path, s: &Settings) -> Result<Plan> {
     }
     let mut plan = Plan {
         scanned: all.len(),
+        documentation_inputs: if s.docs {
+            all.values()
+                .filter(|i| {
+                    !i.grpc && !i.relative.starts_with("google/") && !exclude.matches(&i.relative)
+                })
+                .map(|i| i.relative.clone())
+                .collect()
+        } else {
+            vec![]
+        },
         selected: vec![],
         excluded: vec![],
         filtered: vec![],
@@ -364,7 +375,7 @@ pub fn make(root: &Path, s: &Settings) -> Result<Plan> {
                 .push(format!("server/protocol/{stem}_grpc.pb.go"));
         }
     }
-    if s.docs {
+    if !plan.documentation_inputs.is_empty() {
         plan.outputs
             .extend(["proto/protocol.md".into(), "proto/protocol.html".into()]);
     }

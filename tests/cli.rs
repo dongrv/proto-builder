@@ -84,6 +84,83 @@ fn disjoint_activity_machine_filters_explain_existing_ids_and_remedy() {
 }
 
 #[test]
+fn selective_go_build_preserves_complete_shared_documents() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    fixture(root);
+    for id in [7001, 7002, 7003] {
+        let folder = root.join(format!("proto/act{id}"));
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(folder.join("a.proto"), format!("syntax=\"proto3\";\npackage act{id};\noption go_package=\"example/protocol/act{id}\";\nmessage Module{id} {{string value=1;}}\n")).unwrap();
+    }
+    let full = run(root, &["build"]);
+    assert!(full.status.success(), "{}", report(&full));
+    let docs = ["protocol.html", "protocol.md"];
+    let original = docs.map(|name| fs::read(root.join("proto").join(name)).unwrap());
+    let unselected = tree(&root.join("server/protocol/act7003"));
+    for args in [
+        vec!["build", "--activity-id", "7001,7002"],
+        vec!["build", "--assign-id", "7001"],
+    ] {
+        let selected = run(root, &args);
+        assert!(selected.status.success(), "{}", report(&selected));
+        assert_eq!(report(&selected)["result"]["documentation_proto_files"], 4);
+        for (index, name) in docs.iter().enumerate() {
+            assert_eq!(
+                fs::read(root.join("proto").join(name)).unwrap(),
+                original[index]
+            );
+        }
+        assert_eq!(tree(&root.join("server/protocol/act7003")), unselected);
+    }
+    // A change in an unselected module still belongs in the shared documents.
+    let path = root.join("proto/act7003/a.proto");
+    let text = fs::read_to_string(&path).unwrap();
+    fs::write(
+        &path,
+        text.replace("string value=1;", "string value=1; int32 added=2;"),
+    )
+    .unwrap();
+    let selected = run(root, &["build", "--activity-id", "7001"]);
+    assert!(selected.status.success(), "{}", report(&selected));
+    for name in docs {
+        let text = fs::read_to_string(root.join("proto").join(name)).unwrap();
+        assert!(text.contains("Module7003"));
+        assert!(text.contains("added"));
+    }
+    assert_eq!(tree(&root.join("server/protocol/act7003")), unselected);
+    let before = docs.map(|name| fs::read(root.join("proto").join(name)).unwrap());
+    let no_docs = run(root, &["build", "--activity-id", "7001", "--no-docs"]);
+    assert!(no_docs.status.success(), "{}", report(&no_docs));
+    for (index, name) in docs.iter().enumerate() {
+        assert_eq!(
+            fs::read(root.join("proto").join(name)).unwrap(),
+            before[index]
+        );
+    }
+    let excluded = run(
+        root,
+        &["build", "--activity-id", "7001", "--exclude", "act7003"],
+    );
+    assert!(excluded.status.success(), "{}", report(&excluded));
+    for name in docs {
+        assert!(!fs::read_to_string(root.join("proto").join(name))
+            .unwrap()
+            .contains("Module7003"));
+    }
+    let before = docs.map(|name| fs::read(root.join("proto").join(name)).unwrap());
+    fs::write(path, "syntax=\"proto3\"; package act7003; INVALID").unwrap();
+    let failed = run(root, &["build", "--activity-id", "7001"]);
+    assert!(!failed.status.success());
+    for (index, name) in docs.iter().enumerate() {
+        assert_eq!(
+            fs::read(root.join("proto").join(name)).unwrap(),
+            before[index]
+        );
+    }
+}
+
+#[test]
 fn plan_is_read_only_even_with_default_svn_update() {
     let dir = tempfile::tempdir().unwrap();
     fixture(dir.path());

@@ -277,6 +277,10 @@
                     ><span data-i18n>生成协议号配置</span></label
                   >
                 </div>
+                <p class="field-note" data-i18n>
+                  HTML / Markdown 为完整共享文档，不受 ID
+                  筛选影响；排除目录仍生效。
+                </p>
                 <details class="fold advanced">
                   <summary data-i18n>更多选项</summary>
                   <div class="advanced-grid">
@@ -383,6 +387,20 @@
               </button>
             </div>
             <progress id="progress" aria-label="构建进度"></progress>
+          </div>
+          <div
+            id="completion-box"
+            class="completion-box"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+            hidden
+          >
+            <span class="completion-mark" aria-hidden="true">✓</span>
+            <div>
+              <h3 id="completion-title"></h3>
+              <p id="completion-summary"></p>
+            </div>
           </div>
           <div id="error-box" class="error-box" hidden>
             <h3 id="error-title" data-i18n>本次操作已中止</h3>

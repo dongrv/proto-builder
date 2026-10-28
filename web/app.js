@@ -35,6 +35,8 @@
     "编译前更新 SVN": "Update SVN before build",
     同步计算服: "Sync calculation server",
     生成协议文档: "Generate documentation",
+    "HTML / Markdown 为完整共享文档，不受 ID 筛选影响；排除目录仍生效。":
+      "HTML / Markdown always cover the complete project, independent of ID filters; exclusions still apply.",
     生成协议号配置: "Generate protocol IDs",
     更多选项: "More options",
     "并行数 · 0 为自动": "Parallel jobs · 0 = automatic",
@@ -495,6 +497,8 @@
     $("result-content").hidden = true;
     $("empty-state").hidden = false;
     $("error-box").hidden = true;
+    $("completion-box").hidden = true;
+    document.title = "Proto Builder · 协议构建工作台";
     $("download-report").hidden = true;
     $("command-text").textContent = "";
     $("elapsed").textContent = "";
@@ -603,6 +607,8 @@
     state.cancelling = false;
     $("command-text").textContent = job.command;
     $("error-box").hidden = true;
+    $("completion-box").hidden = true;
+    document.title = "Proto Builder · 协议构建工作台";
     $("empty-state").hidden = false;
     $("result-content").hidden = true;
     $("download-report").hidden = true;
@@ -642,7 +648,11 @@
         setBusy(false);
         $("download-report").hidden = false;
         renderReport(data);
-        if (data.status === "success") tab("result");
+        if (data.status === "success") {
+          tab("result");
+          $("result-view").scrollTop = 0;
+          $("completion-box").scrollIntoView({ block: "nearest" });
+        }
         if (data.status === "success" && data.command === "build")
           loadCatalog();
         if (data.report_error) notice(data.report_error, true);
@@ -727,6 +737,32 @@
       }),
     );
     const result = report.result;
+    const success = report.finished && report.status === "success";
+    $("completion-box").hidden = !success;
+    if (success) {
+      const title =
+        report.command === "build"
+          ? localized("编译完成", "Build complete")
+          : report.command === "plan"
+            ? localized(
+                "预览完成，未写入文件",
+                "Preview complete — no files written",
+              )
+            : localized("环境检查完成", "Environment check complete");
+      const elapsed = Number(report.duration_seconds || 0).toFixed(1);
+      const c = result?.changes;
+      $("completion-title").textContent = title;
+      $("completion-summary").textContent = c
+        ? localized(
+            `耗时 ${elapsed} 秒 · 新增 ${number(c.added.length)} · 修改 ${number(c.modified.length)} · 删除 ${number(c.removed.length)} · 未变 ${number(c.unchanged.length)}。生成物已安全写回。`,
+            `${elapsed}s · ${number(c.added.length)} added · ${number(c.modified.length)} modified · ${number(c.removed.length)} removed · ${number(c.unchanged.length)} unchanged. Outputs safely deployed.`,
+          )
+        : localized(
+            `耗时 ${elapsed} 秒，详情见下方结果。`,
+            `${elapsed}s. See the results below.`,
+          );
+      document.title = `✓ ${title} · Proto Builder`;
+    }
     $("empty-state").hidden = Boolean(result);
     $("result-content").hidden = !result;
     $("unchanged-label").hidden = !result?.changes;
@@ -743,6 +779,11 @@
         `预览未写入任何生成物。${result.excluded.length} 个文件被排除，${result.filtered.length} 个文件被 ID 筛选跳过，${result.import_only.length} 个文件仅作为导入依赖。`,
         `Preview wrote no generated files. ${result.excluded.length} excluded, ${result.filtered.length} skipped by ID filters, ${result.import_only.length} used only as imports.`,
       );
+      if (result.documentation_inputs?.length)
+        $("result-note").textContent += localized(
+          ` 共享 HTML / Markdown 将由完整的 ${number(result.documentation_inputs.length)} 个非 RPC 协议生成，不受 ID 筛选影响。`,
+          ` Shared HTML / Markdown will cover all ${number(result.documentation_inputs.length)} non-RPC protocols, independent of ID filters.`,
+        );
     } else if (result.changes) {
       const c = result.changes;
       metrics.replaceChildren(
@@ -757,6 +798,11 @@
         `${number(result.proto_files)} 个协议 · ${number(result.groups)} 个目录 · ${number(result.commands)} 条编译命令${c.adopted?.length ? ` · 接管 ${c.adopted.length} 个已有文件` : ""}${c.backup ? `。备份：${c.backup}` : ""}`,
         `${number(result.proto_files)} protocols · ${number(result.groups)} directories · ${number(result.commands)} compiler commands${c.adopted?.length ? ` · ${c.adopted.length} existing files adopted` : ""}${c.backup ? `. Backup: ${c.backup}` : ""}`,
       );
+      if (result.documentation_proto_files)
+        $("result-note").textContent += localized(
+          `。共享文档：完整 ${number(result.documentation_proto_files)} 个非 RPC 协议。`,
+          `. Shared documents: all ${number(result.documentation_proto_files)} non-RPC protocols.`,
+        );
     } else if (result.checks) {
       metrics.replaceChildren(
         metric(

@@ -37,7 +37,7 @@ proto-builder build --activity-id 7034 --exclude experimental --exclude 'draft/*
 proto-builder build --no-svn-update
 ```
 
-**构建前默认更新项目范围内的 SVN，需要已安装 `svn.exe`。** 可通过配置或 `--no-svn-update` 关闭；`plan` 始终只读，不更新 SVN、不生成文件。新工具运行不调用旧脚本。
+**构建前默认更新项目范围内的 SVN，需要已安装 `svn.exe`。** 可通过配置或 `--no-svn-update` 关闭；`plan` 始终只读，不更新 SVN、不生成文件。新工具运行不调用旧脚本。共享 HTML / Markdown 始终按完整非 RPC 协议集生成，不受 ID 筛选影响，显式排除项仍生效。
 
 ## 配置与更新
 
