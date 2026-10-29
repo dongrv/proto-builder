@@ -1,5 +1,5 @@
 use crate::{
-    agent::{Conflict, OutputConflict},
+    failure::{Conflict, OutputConflict},
     report::Reporter,
     util,
 };
@@ -412,9 +412,9 @@ mod tests {
         assert_eq!(fs::read_to_string(root.join("a")).unwrap(), "old a");
         assert!(!root.join("b").exists());
         assert!(!root.join("state/manifest.json").exists());
-        let result = report.agent_output(&Ok(root.join("unused-report.json")));
-        assert_eq!(result["output_state"], "rolled_back");
-        assert_eq!(result["generated_files_changed"], false);
+        let result = report.response(Some(&Ok(root.join("unused-report.json"))));
+        assert_eq!(result["output"]["state"], "rolled_back");
+        assert_eq!(result["output"]["changed"], false);
     }
     #[test]
     fn edits_require_force_unowned_files_require_adoption_and_partial_preserves_other_scopes() {

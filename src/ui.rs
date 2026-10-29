@@ -6,7 +6,7 @@ use crate::{
 use anyhow::{bail, Result};
 use crossterm::{
     cursor,
-    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
+    event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     execute, queue,
     style::{Attribute, Print, SetAttribute},
     terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
@@ -325,6 +325,7 @@ pub fn wizard(
                         },
                         &options,
                         old,
+                        SelectionKind::Id,
                     )? {
                         if activity {
                             loaded.settings.activity_ids = values
@@ -356,6 +357,7 @@ pub fn wizard(
                         ),
                         &choices.into_iter().collect::<Vec<_>>(),
                         &loaded.settings.excludes,
+                        SelectionKind::Exclude,
                     )? {
                         loaded.settings.excludes = values;
                     }
@@ -488,7 +490,12 @@ pub fn wizard(
             Ok(())
         })();
         if let Err(error) = operation {
-            notice = format!("{error:#}");
+            if format!("{error:#}").contains("[E_CANCELLED]") {
+                return Err(error);
+            }
+            if !scroll_text("操作失败 / Operation failed", &format!("{error:#}"), false)? {
+                bail!("[E_CANCELLED] 用户退出向导 / User exited wizard");
+            }
         }
     }
 }
@@ -503,51 +510,197 @@ fn toggle(name: &str, on: bool) -> String {
     format!("[{}] {name}", if on { "x" } else { " " })
 }
 fn id_options(loaded: &Loaded, activity: bool) -> Result<Vec<String>> {
-    let re = regex::Regex::new(if activity {
-        r"(?:act|activity)(\d+)"
-    } else {
-        r"(?:slot|machine|rpc)(\d+)"
-    })?;
-    let mut values = BTreeSet::new();
-    for file in crate::scan::discover(&loaded.settings.proto(&loaded.root))? {
-        for cap in re.captures_iter(&file.to_string_lossy()) {
-            values.insert(cap[1].to_owned());
+    let mut settings = loaded.settings.clone();
+    settings.activity_ids.clear();
+    settings.machine_ids.clear();
+    settings.assign_id = 0;
+    settings.excludes.clear();
+    let plan = crate::scan::make(&loaded.root, &settings)?;
+    let mut values = plan
+        .selected
+        .iter()
+        .filter_map(|item| {
+            if activity {
+                item.activity_id.clone()
+            } else {
+                item.machine_id.clone()
+            }
+        })
+        .collect::<BTreeSet<_>>();
+    values.extend(
+        if activity {
+            &loaded.settings.activity_ids
+        } else {
+            &loaded.settings.machine_ids
         }
-    }
-    for value in if activity {
-        &loaded.settings.activity_ids
-    } else {
-        &loaded.settings.machine_ids
-    } {
-        values.insert(value.clone());
-    }
+        .iter()
+        .cloned(),
+    );
     Ok(values.into_iter().collect())
 }
-fn input(title: &str, initial: &str) -> Result<Option<String>> {
-    let mut text = initial.to_owned();
-    loop {
-        execute!(io::stdout(), Clear(ClearType::All))?;
-        row(1, title, false)?;
-        row(3, &text, false)?;
-        row(5, "Enter: confirm | Esc: cancel | Ctrl+U: clear", false)?;
-        io::stdout().flush()?;
-        match read_event()? {
-            Event::Key(key) if key.kind != KeyEventKind::Release => match key.code {
-                KeyCode::Esc => return Ok(None),
-                KeyCode::Enter => return Ok(Some(text)),
-                KeyCode::Backspace => {
-                    text.pop();
-                }
-                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => text.clear(),
-                KeyCode::Char(c) => text.push(c),
-                _ => {}
-            },
-            Event::Paste(value) => text.push_str(&value),
+
+#[derive(Default)]
+struct Editor {
+    chars: Vec<char>,
+    cursor: usize,
+    start: usize,
+}
+impl Editor {
+    fn new(text: &str) -> Self {
+        let chars = text.chars().filter(|c| !c.is_control()).collect::<Vec<_>>();
+        let cursor = chars.len();
+        Self {
+            chars,
+            cursor,
+            start: 0,
+        }
+    }
+    fn text(&self) -> String {
+        self.chars.iter().collect()
+    }
+    fn insert(&mut self, value: &str) {
+        for c in value.chars().filter(|c| !c.is_control()) {
+            self.chars.insert(self.cursor, c);
+            self.cursor += 1;
+        }
+    }
+    fn key(&mut self, key: KeyEvent) {
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            if matches!(key.code, KeyCode::Char('u' | 'U')) {
+                self.chars.clear();
+                self.cursor = 0;
+                self.start = 0;
+            }
+            return;
+        }
+        if key.modifiers.contains(KeyModifiers::ALT) {
+            return;
+        }
+        match key.code {
+            KeyCode::Left => self.cursor = self.cursor.saturating_sub(1),
+            KeyCode::Right => self.cursor = (self.cursor + 1).min(self.chars.len()),
+            KeyCode::Home => self.cursor = 0,
+            KeyCode::End => self.cursor = self.chars.len(),
+            KeyCode::Backspace if self.cursor > 0 => {
+                self.cursor -= 1;
+                self.chars.remove(self.cursor);
+            }
+            KeyCode::Delete if self.cursor < self.chars.len() => {
+                self.chars.remove(self.cursor);
+            }
+            KeyCode::Char(c) if !c.is_control() => self.insert(&c.to_string()),
             _ => {}
         }
     }
+    fn viewport(&mut self, width: usize) -> (String, u16) {
+        let width = width.max(1);
+        self.start = self.start.min(self.cursor);
+        let columns = |chars: &[char]| {
+            chars
+                .iter()
+                .map(|c| unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0))
+                .sum::<usize>()
+        };
+        let mut col = columns(&self.chars[self.start..self.cursor]);
+        while self.start < self.cursor && col >= width {
+            col = col.saturating_sub(
+                unicode_width::UnicodeWidthChar::width(self.chars[self.start]).unwrap_or(0),
+            );
+            self.start += 1;
+        }
+        let mut used = 0;
+        let visible = self.chars[self.start..]
+            .iter()
+            .take_while(|c| {
+                used += unicode_width::UnicodeWidthChar::width(**c).unwrap_or(0);
+                used <= width
+            })
+            .collect::<String>();
+        (visible, col as u16)
+    }
 }
-fn multi(title: &str, options: &[String], initial: &[String]) -> Result<Option<Vec<String>>> {
+fn input(title: &str, initial: &str) -> Result<Option<String>> {
+    let mut editor = Editor::new(initial);
+    let result = (|| -> Result<Option<String>> {
+        loop {
+            let (width, _) = terminal::size()?;
+            let (visible, col) = editor.viewport(width.saturating_sub(2) as usize);
+            execute!(io::stdout(), Clear(ClearType::All))?;
+            row(1, title, false)?;
+            row(3, &visible, false)?;
+            row(
+                5,
+                "Enter: confirm | Esc: back | Ctrl+C: exit | Ctrl+U: clear",
+                false,
+            )?;
+            row(
+                6,
+                "← → / Home / End / Delete: edit | 长路径可左右滚动",
+                false,
+            )?;
+            execute!(io::stdout(), cursor::MoveTo(col + 1, 3), cursor::Show)?;
+            io::stdout().flush()?;
+            match read_event()? {
+                Event::Key(key) => match key.code {
+                    KeyCode::Esc => return Ok(None),
+                    KeyCode::Enter => return Ok(Some(editor.text())),
+                    _ => editor.key(key),
+                },
+                Event::Paste(value) => editor.insert(&value),
+                _ => {}
+            }
+        }
+    })();
+    execute!(io::stdout(), cursor::Hide)?;
+    result
+}
+#[derive(Clone, Copy)]
+enum SelectionKind {
+    Id,
+    Exclude,
+}
+fn manual_values(text: &str, kind: SelectionKind) -> Result<Vec<String>> {
+    let values = match kind {
+        SelectionKind::Id => {
+            let values = text
+                .split(|c: char| c == ',' || c == '，' || c.is_whitespace())
+                .filter(|v| !v.is_empty())
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            if values
+                .iter()
+                .any(|v| !v.chars().all(|c| c.is_ascii_digit()))
+            {
+                bail!(
+                    "[E_FILTER] 请输入数字 ID，用逗号分隔 / Enter numeric IDs separated by commas"
+                );
+            }
+            values
+        }
+        SelectionKind::Exclude => {
+            let values = text
+                .split([',', '，'])
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            crate::scan::Excludes::new(&values)?;
+            values
+        }
+    };
+    Ok(values)
+}
+fn multi(
+    title: &str,
+    options: &[String],
+    initial: &[String],
+    kind: SelectionKind,
+) -> Result<Option<Vec<String>>> {
+    let mut options = options
+        .iter()
+        .cloned()
+        .chain(initial.iter().cloned())
+        .collect::<BTreeSet<_>>();
     let mut marked = initial.iter().cloned().collect::<BTreeSet<_>>();
     let mut query = String::new();
     let mut cursor = 0usize;
@@ -571,7 +724,7 @@ fn multi(title: &str, options: &[String], initial: &[String]) -> Result<Option<V
         row(1, &format!("Search / 搜索: {query}"), false)?;
         row(
             2,
-            "↑↓: select | Space: toggle | Enter: confirm | Esc: cancel",
+            "↑↓: select | Space: toggle | Enter: confirm | Insert: add ID/glob | Esc: back",
             false,
         )?;
         for (index, value) in filtered.iter().enumerate().skip(offset).take(available) {
@@ -598,6 +751,35 @@ fn multi(title: &str, options: &[String], initial: &[String]) -> Result<Option<V
             Event::Key(key) if key.kind != KeyEventKind::Release => match key.code {
                 KeyCode::Esc => return Ok(None),
                 KeyCode::Enter => return Ok(Some(marked.into_iter().collect())),
+                KeyCode::Insert => {
+                    let title = match kind {
+                        SelectionKind::Id => "添加 ID，逗号分隔 / Add numeric IDs, comma-separated",
+                        SelectionKind::Exclude => {
+                            "添加排除路径或 glob / Add exclusion paths or globs"
+                        }
+                    };
+                    if let Some(text) = input(title, "")? {
+                        match manual_values(&text, kind) {
+                            Ok(values) => {
+                                options.extend(values.iter().cloned());
+                                marked.extend(values);
+                                query.clear();
+                                cursor = 0;
+                                offset = 0;
+                            }
+                            Err(error) => {
+                                if !scroll_text(
+                                    "输入无效 / Invalid input",
+                                    &format!("{error:#}"),
+                                    false,
+                                )? {
+                                    bail!("[E_CANCELLED] 用户退出向导 / User exited wizard");
+                                }
+                            }
+                        }
+                    }
+                    continue;
+                }
                 KeyCode::Up => {
                     cursor = cursor.saturating_sub(1);
                     false
@@ -629,7 +811,12 @@ fn multi(title: &str, options: &[String], initial: &[String]) -> Result<Option<V
                     offset = 0;
                     false
                 }
-                KeyCode::Char(c) => {
+                KeyCode::Char(c)
+                    if !key
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                        && !c.is_control() =>
+                {
                     query.push(c);
                     cursor = 0;
                     offset = 0;
@@ -637,6 +824,12 @@ fn multi(title: &str, options: &[String], initial: &[String]) -> Result<Option<V
                 }
                 _ => false,
             },
+            Event::Paste(text) => {
+                query.extend(text.chars().filter(|c| !c.is_control()));
+                cursor = 0;
+                offset = 0;
+                false
+            }
             _ => false,
         };
         if toggle {
@@ -648,41 +841,252 @@ fn multi(title: &str, options: &[String], initial: &[String]) -> Result<Option<V
         }
     }
 }
-fn review(text: &str) -> Result<bool> {
+fn wrap_lines(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(2);
+    text.lines()
+        .flat_map(|line| {
+            let mut lines = vec![];
+            let mut current = String::new();
+            let mut used = 0;
+            for c in line.chars() {
+                let c = if c == '\t' { ' ' } else { c };
+                if c.is_control() {
+                    continue;
+                }
+                let size = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+                if used + size > width && !current.is_empty() {
+                    lines.push(std::mem::take(&mut current));
+                    used = 0;
+                }
+                current.push(c);
+                used += size;
+            }
+            lines.push(current);
+            lines
+        })
+        .collect()
+}
+fn scroll_text(title: &str, text: &str, save: bool) -> Result<bool> {
     let mut offset = 0usize;
-    let lines = text.lines().collect::<Vec<_>>();
     loop {
-        let (_, h) = terminal::size()?;
-        let size = h.saturating_sub(4) as usize;
+        let (width, height) = terminal::size()?;
+        let lines = wrap_lines(text, width.saturating_sub(2) as usize);
+        let size = height.saturating_sub(4).max(1) as usize;
+        let last = lines.len().saturating_sub(size);
+        offset = offset.min(last);
         execute!(io::stdout(), Clear(ClearType::All))?;
-        row(0, "配置预览 / Configuration preview", false)?;
+        row(
+            0,
+            &format!("{title}  [{}/{}]", offset + 1, lines.len().max(1)),
+            false,
+        )?;
         for (i, line) in lines.iter().skip(offset).take(size).enumerate() {
             row(i as u16 + 1, line, false)?;
         }
         row(
-            h.saturating_sub(2),
-            "Y: save (backup existing) | N / Esc: cancel | ↑↓: scroll",
+            height.saturating_sub(2),
+            if save {
+                "Y: save with backup | N / Esc: back | ↑↓ PgUp/PgDn Home/End: scroll"
+            } else {
+                "Enter / Esc: back | Q: exit | ↑↓ PgUp/PgDn Home/End: scroll"
+            },
             false,
         )?;
         io::stdout().flush()?;
-        match read_event()? {
-            Event::Key(key) if key.kind != KeyEventKind::Release => match key.code {
-                KeyCode::Char('y' | 'Y') => return Ok(true),
-                KeyCode::Esc | KeyCode::Char('n' | 'N') => return Ok(false),
-                KeyCode::Down => offset = (offset + 1).min(lines.len().saturating_sub(size)),
+        if let Event::Key(key) = read_event()? {
+            match key.code {
+                KeyCode::Char('y' | 'Y')
+                    if save && !key.modifiers.contains(KeyModifiers::CONTROL) =>
+                {
+                    return Ok(true)
+                }
+                KeyCode::Esc | KeyCode::Char('n' | 'N') if save => return Ok(false),
+                KeyCode::Enter | KeyCode::Esc if !save => return Ok(true),
+                KeyCode::Char('q' | 'Q') if !save => return Ok(false),
+                KeyCode::Down => offset = (offset + 1).min(last),
                 KeyCode::Up => offset = offset.saturating_sub(1),
+                KeyCode::PageDown => offset = (offset + size).min(last),
+                KeyCode::PageUp => offset = offset.saturating_sub(size),
+                KeyCode::Home => offset = 0,
+                KeyCode::End => offset = last,
                 _ => {}
-            },
-            _ => {}
+            }
         }
+    }
+}
+fn review(text: &str) -> Result<bool> {
+    scroll_text("配置预览 / Configuration preview", text, true)
+}
+pub fn result_view(
+    settings: &Settings,
+    value: &serde_json::Value,
+    report_path: &str,
+) -> Result<bool> {
+    let _terminal = Terminal::enter()?;
+    let text = result_text(settings, value, report_path)?;
+    scroll_text(tr(settings, "执行结果", "Operation result"), &text, false)
+}
+fn result_text(
+    settings: &Settings,
+    value: &serde_json::Value,
+    report_path: &str,
+) -> Result<String> {
+    let output = match value["output_state"].as_str() {
+        Some("not_written") => tr(settings, "未写回本次生成物", "No generated outputs written"),
+        Some("committed") => tr(settings, "生成物已写回", "Generated outputs committed"),
+        Some("rolled_back") => tr(settings, "本次写回已回滚", "Current write rolled back"),
+        Some("recovered") => tr(
+            settings,
+            "已恢复上次中断事务",
+            "Previous interrupted transaction recovered",
+        ),
+        Some("recovery_required" | "writing" | "recovering") => tr(
+            settings,
+            "状态需核对，请查看报告与备份",
+            "Inspect report and backups before proceeding",
+        ),
+        _ => tr(
+            settings,
+            "状态未知，请查看完整报告",
+            "Unknown; inspect complete report",
+        ),
+    };
+    let mut text = format!(
+        "{}: {}\n{}: {}\n{}: {}\n\n",
+        tr(settings, "状态", "Status"),
+        if value["report_error"].is_string() {
+            tr(
+                settings,
+                "报告保存失败，请核对下方写回状态",
+                "Report could not be saved; check output state below",
+            )
+        } else if value["status"] == "success" {
+            tr(settings, "完成", "Completed")
+        } else {
+            tr(settings, "已中止", "Stopped")
+        },
+        tr(settings, "生成物写回状态", "Output state"),
+        output,
+        tr(settings, "完整报告", "Complete report"),
+        report_path
+    );
+    if let Some(error) = value["error"].as_str() {
+        text.push_str(error);
+        text.push_str("\n\n");
+    }
+    if let Some(action) = value["failure"]["suggested_action"].as_str() {
+        let (zh, en) = match action {
+            "review_filters" => (
+                "核对活动、机器和排除条件，再重新预览。",
+                "Review activity, machine and exclusion filters, then preview again.",
+            ),
+            "correct_paths" => (
+                "修正输入与输出目录，避免重叠，再检查环境。",
+                "Correct input/output directories and overlaps, then run doctor.",
+            ),
+            "correct_protocol_sources" => (
+                "按下方原文件行号修复协议，再重新预览或编译。",
+                "Correct protocol sources at the reported file/line, then retry.",
+            ),
+            "resolve_svn_conflicts" => (
+                "先处理 SVN 冲突，再重新预览。",
+                "Resolve SVN conflicts before previewing again.",
+            ),
+            "review_existing_outputs" => (
+                "核对冲突文件和备份策略，再决定是否启用接管或覆盖。",
+                "Review conflicting outputs and backups before enabling adoption or replacement.",
+            ),
+            "reload_configuration_and_plan" => (
+                "输入已变化，重新加载配置并预览。",
+                "Reload changed inputs/configuration and preview again.",
+            ),
+            "retry_after_current_build" => (
+                "等待当前构建结束再重试。",
+                "Wait for the current build to finish before retrying.",
+            ),
+            "correct_configuration" | "correct_arguments" => (
+                "修正配置或参数，再重新预览。",
+                "Correct configuration or arguments and preview again.",
+            ),
+            "check_report_storage_and_output_state" | "inspect_output_state_and_recovery" => (
+                "先核对写回状态、备份和报告目录权限，避免重复执行。",
+                "Inspect output state, backups and report-directory permissions before retrying.",
+            ),
+            "resume_if_requested" => (
+                "已取消；可返回修改参数，或退出。",
+                "Cancelled; return to edit settings or exit.",
+            ),
+            _ => (
+                "查看完整报告和上述诊断，修复对应原因后重试。",
+                "Inspect the full report and diagnostics; fix the cause before retrying.",
+            ),
+        };
+        text.push_str(&format!(
+            "{}: {}\n\n",
+            tr(settings, "下一步", "Next step"),
+            tr(settings, zh, en)
+        ));
+    }
+    if let Some(items) = value["diagnostics"].as_array() {
+        for item in items {
+            let column = item["column"]
+                .as_u64()
+                .map(|v| format!(":{v}"))
+                .unwrap_or_default();
+            text.push_str(&format!(
+                "{}:{}{column}\n{}\n\n",
+                item["file"].as_str().unwrap_or(""),
+                item["line"],
+                item["message"].as_str().unwrap_or("")
+            ));
+        }
+    }
+    if let Some(error) = value["report_error"].as_str() {
+        text.push_str(&format!("\n[E_REPORT] {error}\n"));
+    }
+    if let Some(inputs) = value["result"]["selected"].as_array() {
+        text.push_str(&format!(
+            "{}: {}\n",
+            tr(settings, "待编译协议", "Selected protocols"),
+            inputs.len()
+        ));
+        text.push_str(&format!(
+            "{}: {}\n\n",
+            tr(
+                settings,
+                "完整共享文档协议数",
+                "Full shared documentation inputs"
+            ),
+            value["result"]["documentation_inputs"]
+                .as_array()
+                .map_or(0, Vec::len)
+        ));
+        for item in inputs {
+            text.push_str(item["relative"].as_str().unwrap_or(""));
+            text.push('\n');
+        }
+    } else if !value["result"].is_null() {
+        text.push_str(&serde_json::to_string_pretty(&value["result"])?);
+    }
+    Ok(text)
+}
+fn is_interrupt(key: KeyEvent) -> bool {
+    matches!(key.code, KeyCode::Char('c' | 'C')) && key.modifiers.contains(KeyModifiers::CONTROL)
+}
+fn accepted_event(event: Event) -> Result<Option<Event>> {
+    match event {
+        Event::Mouse(_) | Event::FocusGained | Event::FocusLost => Ok(None),
+        Event::Key(key) if key.kind == KeyEventKind::Release => Ok(None),
+        Event::Key(key) if is_interrupt(key) => {
+            bail!("[E_CANCELLED] 用户取消操作 / Cancelled by user")
+        }
+        event => Ok(Some(event)),
     }
 }
 fn read_event() -> Result<Event> {
     loop {
-        match event::read()? {
-            Event::Mouse(_) | Event::FocusGained | Event::FocusLost => continue,
-            Event::Key(key) if key.kind == KeyEventKind::Release => continue,
-            event => return Ok(event),
+        if let Some(event) = accepted_event(event::read()?)? {
+            return Ok(event);
         }
     }
 }
@@ -719,4 +1123,126 @@ pub fn equivalent(loaded: &Loaded, command: &str, options: &Options) -> String {
         args.push("--force".into());
     }
     args.join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::KeyEvent;
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn editor_edits_middle_of_long_unicode_path_and_keeps_cursor_visible() {
+        let initial = format!("D:/{}终点", "很长的路径/".repeat(30));
+        let mut editor = Editor::new(&initial);
+        let (visible, col) = editor.viewport(20);
+        assert!(visible.ends_with("终点"));
+        assert!(col < 20);
+        editor.key(key(KeyCode::Home));
+        editor.key(key(KeyCode::Right));
+        editor.key(key(KeyCode::Delete));
+        editor.insert(":replacement");
+        assert!(editor.text().starts_with("D:replacement/"));
+        editor.key(key(KeyCode::End));
+        editor.key(key(KeyCode::Backspace));
+        editor.key(key(KeyCode::Left));
+        editor.insert("新");
+        assert!(editor.text().ends_with("新终"));
+        editor.key(key(KeyCode::Home));
+        let (visible, col) = editor.viewport(20);
+        assert!(visible.starts_with("D:replacement/"));
+        assert_eq!(col, 0);
+    }
+    #[test]
+    fn control_keys_do_not_insert_letters_and_interrupt_is_shared() {
+        let mut editor = Editor::new("keep");
+        let interrupt = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert!(is_interrupt(interrupt));
+        let error = accepted_event(Event::Key(interrupt)).unwrap_err();
+        assert_eq!(crate::report::exit_code(&Err(error)), 130);
+        assert!(accepted_event(Event::FocusGained).unwrap().is_none());
+        editor.key(interrupt);
+        editor.key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL));
+        assert_eq!(editor.text(), "keep");
+        assert!(!is_interrupt(key(KeyCode::Char('c'))));
+        editor.key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        assert_eq!(editor.text(), "");
+        editor.insert("中文\r\n路径\t");
+        assert_eq!(editor.text(), "中文路径");
+    }
+    #[test]
+    fn diagnostic_wrapping_retains_every_unicode_character() {
+        let path = format!(
+            "D:/{}文件.proto:123:5: invalid field",
+            "中文目录/".repeat(30)
+        );
+        let wrapped = wrap_lines(&path, 78);
+        assert!(wrapped.len() > 1);
+        assert_eq!(wrapped.concat(), path);
+        for line in wrapped {
+            assert!(unicode_width::UnicodeWidthStr::width(line.as_str()) <= 78);
+        }
+    }
+    #[test]
+    fn wizard_catalog_uses_package_comments_and_relative_paths() {
+        let dir = tempfile::Builder::new()
+            .prefix("act9999-parent-")
+            .tempdir()
+            .unwrap();
+        let proto = dir.path().join("proto/misc");
+        std::fs::create_dir_all(&proto).unwrap();
+        std::fs::write(
+            proto.join("one.proto"),
+            "syntax=\"proto3\";\npackage act7001;\nmessage One {}\n",
+        )
+        .unwrap();
+        std::fs::write(proto.join("two.proto"), "syntax=\"proto3\";\npackage ordinary;\n// activity_id=7002\n// machine_id=5001\nmessage Two {}\n").unwrap();
+        let settings = Settings {
+            activity_ids: vec!["8888".into()],
+            excludes: vec!["misc".into()],
+            assign_id: 999,
+            ..Default::default()
+        };
+        let loaded = Loaded {
+            settings,
+            root: dir.path().into(),
+            sources: vec![],
+            project_file: None,
+            origins: Default::default(),
+        };
+        assert_eq!(
+            id_options(&loaded, true).unwrap(),
+            vec!["7001", "7002", "8888"]
+        );
+        assert_eq!(id_options(&loaded, false).unwrap(), vec!["5001"]);
+    }
+    #[test]
+    fn manual_ids_and_globs_validate_without_dropping_custom_choices() {
+        assert_eq!(
+            manual_values("7001，7002 7003", SelectionKind::Id).unwrap(),
+            vec!["7001", "7002", "7003"]
+        );
+        assert!(manual_values("7001,act7002", SelectionKind::Id).is_err());
+        assert_eq!(
+            manual_values("draft/**,with space", SelectionKind::Exclude).unwrap(),
+            vec!["draft/**", "with space"]
+        );
+        assert!(manual_values("[", SelectionKind::Exclude).is_err());
+    }
+    #[test]
+    fn result_text_distinguishes_committed_output_from_report_failure() {
+        let settings = Settings {
+            lang: "en-US".into(),
+            ..Default::default()
+        };
+        let value = serde_json::json!({"status":"success","output_state":"committed","report_error":"disk full","diagnostics":[{"file":"D:/long/file.proto","line":12,"column":null,"message":"bad field"}]});
+        let text = result_text(&settings, &value, "report failed").unwrap();
+        assert!(text.contains("Generated outputs committed"));
+        assert!(text.contains("disk full"));
+        assert!(text.contains("D:/long/file.proto:12\nbad field"));
+        assert!(!text.contains(":null"));
+    }
 }

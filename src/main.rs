@@ -1,13 +1,19 @@
 mod agent;
+mod agent_api;
+mod agent_queries;
+mod api_contract;
 mod build;
 mod cli;
 mod config;
+mod failure;
 mod install;
+mod mcp;
 mod process;
 mod protocol;
 mod provenance;
 mod report;
 mod scan;
+mod service;
 mod setup;
 mod svn;
 mod toolchain;
@@ -18,8 +24,8 @@ mod util;
 mod web;
 
 use anyhow::{bail, Context, Result};
-use clap::Parser;
-use cli::{Cli, Cmd, ConfigCmd, UpdateCmd};
+use clap::{CommandFactory, Parser};
+use cli::{AgentCmd, Cli, Cmd, ConfigCmd, UpdateCmd};
 use report::Reporter;
 use std::{
     fs,
@@ -27,17 +33,47 @@ use std::{
     sync::atomic::Ordering,
 };
 
+// Identify the command without mistaking a global option value for "agent".
+fn top_command(args: &[std::ffi::OsString]) -> Option<&str> {
+    let command = Cli::command();
+    let mut index = 1;
+    while let Some(raw) = args.get(index) {
+        let value = raw.to_str()?;
+        if value == "--" {
+            return None;
+        }
+        if !value.starts_with('-') {
+            return Some(value);
+        }
+        let (name, inline) = value
+            .split_once('=')
+            .map_or((value, false), |(a, _)| (a, true));
+        let argument = command.get_arguments().find(|a| {
+            name.strip_prefix("--").is_some_and(|n| {
+                a.get_long() == Some(n)
+                    || a.get_all_aliases()
+                        .is_some_and(|aliases| aliases.contains(&n))
+            })
+        });
+        if !inline
+            && argument.is_some_and(|a| a.get_action().takes_values())
+            && args
+                .get(index + 1)
+                .is_some_and(|v| !v.to_string_lossy().starts_with('-'))
+        {
+            index += 1;
+        }
+        index += 1;
+    }
+    None
+}
 fn main() {
     let args = std::env::args_os().collect::<Vec<_>>();
-    let agent_requested = args
-        .iter()
-        .skip(1)
-        .take_while(|s| *s != "--")
-        .any(|s| s == "--agent");
-    let mut cli = match Cli::try_parse_from(args) {
+    let machine_command = top_command(&args) == Some("agent");
+    let cli = match Cli::try_parse_from(args) {
         Ok(cli) => cli,
-        Err(error) if agent_requested => {
-            let reporter = Reporter::for_agent("arguments", false, "en-US");
+        Err(error) if machine_command => {
+            let reporter = Reporter::for_automation("request", false, "en-US");
             let outcome = if matches!(
                 error.kind(),
                 clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
@@ -47,39 +83,62 @@ fn main() {
             } else {
                 Err(anyhow::anyhow!("[E_ARGUMENT] {error}"))
             };
-            let storage = reporter.finish(&outcome, None);
-            let value = reporter.agent_output(&storage);
-            println!("{value}");
-            std::process::exit(value["exit_code"].as_i64().unwrap_or(1) as i32);
+            exit_response(reporter.finish_in_memory(&outcome));
         }
         Err(error) => error.exit(),
     };
-    if cli.options.agent {
-        cli.options.json = true;
-        cli.options.non_interactive = true;
-    }
     let _ = ctrlc::set_handler(|| {
         util::SHUTDOWN.store(true, Ordering::Relaxed);
         util::CANCELLED.store(true, Ordering::Relaxed);
     });
-    let name = cli.command.as_ref().map(Cmd::name).unwrap_or("interactive");
-    let language = cli.options.lang.as_deref().unwrap_or("zh-CN");
-    let reporter = if cli.options.agent {
-        Reporter::for_agent(name, cli.options.verbose, language)
-    } else {
-        Reporter::new(name, cli.options.json, cli.options.verbose, language)
-    };
-    let outcome = execute(&cli, &reporter);
-    let report_path = reporter.finish(&outcome, cli.options.report_json.as_deref());
-    if cli.options.agent {
-        let value = reporter.agent_output(&report_path);
-        println!("{value}");
-        let code = value["exit_code"].as_i64().unwrap_or(1) as i32;
-        if code != 0 {
-            std::process::exit(code);
+    match &cli.command {
+        Some(Cmd::Agent(AgentCmd::Run { request })) => {
+            exit_response(agent_api::run_file(request, &cli.options))
         }
-        return;
+        Some(Cmd::Agent(AgentCmd::Capabilities)) => {
+            exit_response(agent_api::run_capabilities(&cli.options))
+        }
+        Some(Cmd::Mcp) => {
+            if let Err(error) =
+                agent_api::validate_transport_options(&cli.options).and_then(|_| mcp::run())
+            {
+                eprintln!("error: {error:#}");
+                std::process::exit(2);
+            }
+            return;
+        }
+        _ => {}
     }
+    let name = cli.command.as_ref().map(Cmd::name).unwrap_or("interactive");
+    let reporter = Reporter::new(
+        name,
+        cli.options.json,
+        cli.options.verbose,
+        cli.options.lang.as_deref().unwrap_or("zh-CN"),
+    );
+    let outcome = execute(&cli, &reporter);
+    if matches!(cli.command, Some(Cmd::Report { .. })) {
+        match reporter.finish_snapshot(&outcome) {
+            Ok(value) => {
+                if cli.options.json {
+                    println!("{value}");
+                } else if outcome.is_ok() {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&value["result"]).expect("JSON value")
+                    );
+                } else if let Err(error) = &outcome {
+                    eprintln!("error: {error:#}");
+                }
+                std::process::exit(report::exit_code(&outcome));
+            }
+            Err(error) => {
+                eprintln!("error: {error:#}");
+                std::process::exit(1);
+            }
+        }
+    }
+    let report_path = reporter.finish(&outcome, cli.options.report_json.as_deref());
     if let Err(error) = &outcome {
         if !cli.options.json {
             eprintln!(
@@ -105,15 +164,24 @@ fn main() {
         });
     }
 }
+fn exit_response(value: serde_json::Value) -> ! {
+    println!("{value}");
+    std::process::exit(value["exit_code"].as_i64().unwrap_or(1) as i32);
+}
 fn execute(cli: &Cli, report: &Reporter) -> Result<()> {
-    if cli.options.agent
-        && (cli.command.is_none()
-            || cli.options.interactive
-            || matches!(cli.command, Some(Cmd::Web { .. })))
-    {
-        bail!("[E_ARGUMENT] --agent requires an explicit non-interactive command; use config show, doctor, plan or build");
-    }
     match &cli.command {
+        Some(Cmd::Report {
+            path,
+            section,
+            offset,
+            limit,
+        }) => {
+            if cli.options.report_json.is_some() {
+                bail!("[E_ARGUMENT] report queries do not write reports; omit --report-json");
+            }
+            report.result(agent_queries::read_report(path, section, *offset, *limit)?);
+            return Ok(());
+        }
         Some(Cmd::Licenses) => {
             let notices = [
                 ("protobuf", include_str!("../assets/licenses/protobuf.txt")),
@@ -217,11 +285,13 @@ fn execute(cli: &Cli, report: &Reporter) -> Result<()> {
             }
         }
     }
-    report.configure(&loaded.settings.lang, loaded.settings.log_retention);
-    report.context(
-        serde_json::json!({"project_root":loaded.root,"proto_root":loaded.settings.proto(&loaded.root),"server_root":loaded.settings.server(&loaded.root),"calc_root":loaded.settings.calc(&loaded.root),"configuration_sources":loaded.sources,
-            "selection":{"activity_ids":loaded.settings.activity_ids,"machine_ids":loaded.settings.machine_ids,"assign_id":loaded.settings.assign_id,"excludes":loaded.settings.excludes},
-            "policy":{"svn_update":loaded.settings.svn.update,"docs":loaded.settings.docs,"protocol_config":loaded.settings.protocol_config,"copy_to_calc":loaded.settings.copy_to_calc,"protobuf_overwrite":"generated_with_backup","force":cli.options.force,"adopt_existing":cli.options.adopt_existing,"toolchain_mode":loaded.settings.toolchain.mode}}),
+    service::configure_report(
+        &loaded,
+        &build::BuildPolicy {
+            force: cli.options.force,
+            adopt_existing: cli.options.adopt_existing,
+        },
+        report,
     );
     if let Some(Cmd::Web { port, no_open }) = &cli.command {
         return web::run(loaded, &cli.options, *port, !*no_open, report);
@@ -230,67 +300,83 @@ fn execute(cli: &Cli, report: &Reporter) -> Result<()> {
         if cli.options.non_interactive || cli.options.json {
             bail!("[E_ARGUMENT] --interactive cannot be combined with --non-interactive or --json");
         }
-        let mut previous_error = None;
         let mut build_options = cli.options.clone();
         loop {
-            let action = ui::wizard(&mut loaded, &mut build_options, previous_error.as_deref())?;
+            let action = ui::wizard(&mut loaded, &mut build_options, None)?;
             report.configure(&loaded.settings.lang, loaded.settings.log_retention);
-            if matches!(action, ui::Action::Build | ui::Action::Plan) {
+            if matches!(action, ui::Action::Cancel) {
                 report.info(
-                    "command",
-                    ui::equivalent(
-                        &loaded,
-                        if matches!(action, ui::Action::Plan) {
-                            "plan"
-                        } else {
-                            "build"
-                        },
-                        &build_options,
+                    "cancel",
+                    report.text(
+                        "已取消，未开始新的构建",
+                        "Cancelled before starting another build",
                     ),
                 );
-                util::write_json(
-                    &util::data_dir()?.join("recent-project.json"),
-                    &serde_json::json!({"root":loaded.root}),
-                )?;
+                return Ok(());
             }
-            match action {
-                ui::Action::Cancel => {
-                    report.info(
-                        "cancel",
-                        report.text(
-                            "已取消，未开始新的构建",
-                            "Cancelled before starting another build",
-                        ),
-                    );
-                    return Ok(());
-                }
-                ui::Action::Plan => {
-                    let result = build::plan(&loaded, report);
-                    if let Err(error) = result {
-                        previous_error = Some(format!("{error:#}"));
-                    } else {
-                        previous_error = None;
-                        eprintln!(
-                            "{}",
-                            report.text("按 Enter 返回向导", "Press Enter to return to the wizard")
-                        );
-                        let mut line = String::new();
-                        io::stdin().read_line(&mut line)?;
-                    }
-                }
+            let command = if matches!(action, ui::Action::Plan) {
+                "plan"
+            } else {
+                "build"
+            };
+            // Each attempt has its own diagnostics, write state and retained report.
+            let attempt = Reporter::new(command, false, cli.options.verbose, &loaded.settings.lang);
+            attempt.configure(&loaded.settings.lang, loaded.settings.log_retention);
+            attempt.context(serde_json::json!({"project_root":loaded.root,"proto_root":loaded.settings.proto(&loaded.root)}));
+            attempt.info("command", ui::equivalent(&loaded, command, &build_options));
+            util::write_json(
+                &util::data_dir()?.join("recent-project.json"),
+                &serde_json::json!({"root":loaded.root}),
+            )?;
+            let outcome = match action {
+                ui::Action::Plan => build::plan(&loaded, &attempt),
                 ui::Action::Build => {
-                    start_update_check(&loaded.settings, report);
-                    match build::run(&loaded, &build_options, report) {
-                        Ok(()) => return Ok(()),
-                        Err(error) => {
-                            report.emit("error", "error", format!("{error:#}"));
-                            if util::CANCELLED.load(Ordering::Relaxed) {
-                                return Err(error);
-                            }
-                            previous_error = Some(format!("{error:#}"));
-                        }
-                    }
+                    start_update_check(&loaded.settings, &attempt);
+                    build::run(
+                        &loaded,
+                        &build::BuildPolicy {
+                            force: build_options.force,
+                            adopt_existing: build_options.adopt_existing,
+                        },
+                        &attempt,
+                    )
                 }
+                ui::Action::Cancel => unreachable!(),
+            };
+            let stored = attempt.finish(&outcome, cli.options.report_json.as_deref());
+            let (mut value, location) = match &stored {
+                Ok(path) => (
+                    serde_json::from_slice::<serde_json::Value>(&fs::read(path)?)?,
+                    path.display().to_string(),
+                ),
+                Err(error) => (attempt.snapshot(0)?, format!("[E_REPORT] {error:#}")),
+            };
+            if let Err(error) = &stored {
+                value["report_error"] = format!("{error:#}").into();
+            }
+            report.context(serde_json::json!({"last_operation_report":location}));
+            let state = match value["output_state"].as_str() {
+                Some("committed") => "committed",
+                Some("rolled_back") => "rolled_back",
+                Some("recovered") => "recovered",
+                Some("recovery_required") => "recovery_required",
+                Some("writing") => "writing",
+                Some("recovering") => "recovering",
+                _ => "not_written",
+            };
+            if value["recovered_previous_transaction"] == true {
+                report.outputs("recovering", None);
+            }
+            report.outputs(state, value["generated_files_changed"].as_bool());
+            if outcome.is_ok() && stored.is_ok() && matches!(action, ui::Action::Build) {
+                report.result(value["result"].clone());
+                return Ok(());
+            }
+            let continue_editing = ui::result_view(&loaded.settings, &value, &location)?;
+            if util::CANCELLED.load(Ordering::Relaxed) || !continue_editing {
+                outcome?;
+                stored?;
+                return Ok(());
             }
         }
     }
@@ -301,7 +387,27 @@ fn execute(cli: &Cli, report: &Reporter) -> Result<()> {
         Cmd::Build if cli.options.dry_run => build::plan(&loaded, report),
         Cmd::Build => {
             start_update_check(&loaded.settings, report);
-            build::run(&loaded, &cli.options, report)
+            build::run(
+                &loaded,
+                &build::BuildPolicy {
+                    force: cli.options.force,
+                    adopt_existing: cli.options.adopt_existing,
+                },
+                report,
+            )
+        }
+        Cmd::Catalog {
+            query,
+            offset,
+            limit,
+        } => {
+            report.result(agent_queries::catalog(
+                &loaded,
+                query.as_deref(),
+                *offset,
+                *limit,
+            )?);
+            Ok(())
         }
         Cmd::Plan => build::plan(&loaded, report),
         Cmd::Doctor => build::doctor(&loaded, report),
@@ -322,7 +428,7 @@ fn execute(cli: &Cli, report: &Reporter) -> Result<()> {
     }
 }
 fn start_update_check(settings: &config::Settings, report: &Reporter) {
-    if settings.update.enabled && !report.agent {
+    if settings.update.enabled && !report.automation {
         let settings = settings.clone();
         let report = report.clone();
         std::thread::spawn(move || update::background_check(&settings, &report));

@@ -6,7 +6,7 @@ use crate::{
     scan, ui, util,
 };
 use anyhow::{bail, Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeSet, VecDeque},
@@ -25,6 +25,7 @@ use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
 const MAX_BODY: u64 = 256 * 1024;
 const MAX_JOBS: usize = 8;
+const MAX_BACKUP_BYTES: u64 = 128 * 1024 * 1024;
 
 struct Job {
     id: String,
@@ -32,6 +33,29 @@ struct Job {
     reporter: Reporter,
     finished: AtomicBool,
     report_error: Mutex<Option<String>>,
+    loaded: Loaded,
+    form: Form,
+    artifacts: Mutex<Result<JobArtifacts, String>>,
+}
+#[derive(Default, Serialize)]
+struct Locations {
+    project: PathBuf,
+    server: Option<PathBuf>,
+    calc: Option<PathBuf>,
+    docs: Option<PathBuf>,
+    backup: Option<PathBuf>,
+}
+#[derive(Default)]
+struct JobArtifacts {
+    locations: Locations,
+    backups: Vec<BackupFile>,
+}
+struct BackupFile {
+    target: PathBuf,
+    path: PathBuf,
+    name: String,
+    sha256: String,
+    size: u64,
 }
 struct State {
     loaded: Mutex<Loaded>,
@@ -40,7 +64,7 @@ struct State {
     base: String,
     token: String,
 }
-#[derive(Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Form {
     root: PathBuf,
@@ -82,6 +106,20 @@ struct OpenProject {
 struct SaveConfig {
     form: Form,
     expected_hash: Option<String>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OpenArtifact {
+    job_id: String,
+    kind: ArtifactKind,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum ArtifactKind {
+    Docs,
+    Server,
+    Calc,
+    Backup,
 }
 
 pub fn run(
@@ -225,6 +263,9 @@ impl State {
             ),
             finished: AtomicBool::new(false),
             report_error: Mutex::new(None),
+            loaded: loaded.clone(),
+            form: request.form.clone(),
+            artifacts: Mutex::new(Ok(JobArtifacts::default())),
         });
         let command = ui::equivalent(&loaded, request.action.name(), &options);
         job.reporter.info("command", &command);
@@ -247,13 +288,15 @@ impl State {
                 Action::Doctor => build::doctor(&loaded, &job.reporter),
                 Action::Build => {
                     crate::start_update_check(&loaded.settings, &job.reporter);
-                    build::run(&loaded, &options, &job.reporter)
+                    build::run(&loaded, &build::BuildPolicy { force: options.force, adopt_existing: options.adopt_existing }, &job.reporter)
                 }
             })).unwrap_or_else(|_| Err(anyhow::anyhow!("[E_INTERNAL] 构建任务意外退出，请查看终端 / The operation panicked; see the terminal")));
             if let Err(error) = job.reporter.finish(&result, None) {
                 *job.report_error.lock().unwrap_or_else(|e| e.into_inner()) =
                     Some(format!("[E_REPORT] {error:#}"));
             }
+            *job.artifacts.lock().unwrap_or_else(|e| e.into_inner()) =
+                capture_artifacts(&job).map_err(|e| format!("{e:#}"));
             job.finished.store(true, Ordering::Release);
         });
         Ok(json!({"id":id,"command":command}))
@@ -315,6 +358,21 @@ fn handle(mut request: Request, state: &Arc<State>) {
                 .to_vec(),
             None,
         );
+        return;
+    }
+    if request.method() == &Method::Get && path.starts_with("/api/backup/") {
+        match download_backup(state, &path) {
+            Ok((name, bytes)) => {
+                respond(request, 200, "application/octet-stream", bytes, Some(name))
+            }
+            Err(error) => respond(
+                request,
+                400,
+                "application/json; charset=utf-8",
+                serde_json::to_vec(&json!({"error":format!("{error:#}")})).unwrap_or_default(),
+                None,
+            ),
+        }
         return;
     }
     let result = route(&mut request, state, &path);
@@ -448,6 +506,44 @@ fn route(request: &mut Request, state: &Arc<State>, path: &str) -> Result<Value>
             directories(&util::absolute(&loaded.root, &path))
         }
         (Method::Post, "/api/jobs") => state.start(body(request)?),
+        (Method::Post, "/api/open") => {
+            let input: OpenArtifact = body(request)?;
+            let job = state.job(&input.job_id)?;
+            require_finished(&job)?;
+            let artifacts = job.artifacts.lock().unwrap_or_else(|e| e.into_inner());
+            let artifacts = artifacts.as_ref().map_err(|e| anyhow::anyhow!(e.clone()))?;
+            let document = matches!(input.kind, ArtifactKind::Docs);
+            let path = match input.kind {
+                ArtifactKind::Docs => &artifacts.locations.docs,
+                ArtifactKind::Server => &artifacts.locations.server,
+                ArtifactKind::Calc => &artifacts.locations.calc,
+                ArtifactKind::Backup => &artifacts.locations.backup,
+            }
+            .as_ref()
+            .context("[E_WEB_NOT_FOUND] 此任务没有可打开的目标 / No artifact for this task")?;
+            build::reject_reparse_points(path)?;
+            if !(if document {
+                path.is_file()
+            } else {
+                path.is_dir()
+            }) {
+                bail!(
+                    "[E_PATH] 目标已不存在 / Artifact no longer exists: {}",
+                    path.display()
+                );
+            }
+            open_browser(&path.display().to_string())?;
+            Ok(json!({"opened":true,"path":path}))
+        }
+        (Method::Get, path) if path.starts_with("/api/backups/") => {
+            let job = state.job(&path[13..])?;
+            require_finished(&job)?;
+            let artifacts = job.artifacts.lock().unwrap_or_else(|e| e.into_inner());
+            let artifacts = artifacts.as_ref().map_err(|e| anyhow::anyhow!(e.clone()))?;
+            Ok(
+                json!({"directory":artifacts.locations.backup,"files":artifacts.backups.iter().enumerate().map(|(index,file)|json!({"index":index,"target":file.target,"name":file.name,"size":file.size,"download_url":format!("/api/backup/{}/{index}",job.id)})).collect::<Vec<_>>()}),
+            )
+        }
         (Method::Get, path) if path.starts_with("/api/jobs/") => {
             let job = state.job(&path[10..])?;
             let url = reqwest::Url::parse(&format!("{}{}", state.base, request.url()))?;
@@ -456,10 +552,21 @@ fn route(request: &mut Request, state: &Arc<State>, path: &str) -> Result<Value>
                 .find(|(key, _)| key == "after")
                 .and_then(|(_, v)| v.parse().ok())
                 .unwrap_or(0);
+            let finished = job.finished.load(Ordering::Acquire);
             let mut value = job.reporter.snapshot(after)?;
-            value["finished"] = job.finished.load(Ordering::Acquire).into();
+            value["finished"] = finished.into();
             value["report_error"] =
                 json!(*job.report_error.lock().unwrap_or_else(|e| e.into_inner()));
+            value["form"] = serde_json::to_value(&job.form)?;
+            if finished {
+                let artifacts = job.artifacts.lock().unwrap_or_else(|e| e.into_inner());
+                match artifacts.as_ref() {
+                    Ok(artifacts) => {
+                        value["locations"] = serde_json::to_value(&artifacts.locations)?
+                    }
+                    Err(error) => value["artifacts_error"] = json!(error),
+                }
+            }
             Ok(value)
         }
         (Method::Post, path) if path.starts_with("/api/cancel/") => {
@@ -526,6 +633,170 @@ fn route(request: &mut Request, state: &Arc<State>, path: &str) -> Result<Value>
         _ => bail!("[E_WEB_NOT_FOUND] route not found"),
     }
 }
+fn require_finished(job: &Job) -> Result<()> {
+    if !job.finished.load(Ordering::Acquire) {
+        bail!("[E_WEB_BUSY] 请等待任务结束 / Wait for the operation to finish");
+    }
+    Ok(())
+}
+fn checked_file(path: &Path, limit: u64) -> Result<Vec<u8>> {
+    build::reject_reparse_points(path)?;
+    let file = fs::File::open(path)
+        .with_context(|| format!("[E_BACKUP] 无法读取文件 / Cannot read {}", path.display()))?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.len() > limit {
+        bail!("[E_BACKUP] 文件类型或大小不受支持 / Unsupported file type or size");
+    }
+    let mut bytes = Vec::new();
+    file.take(limit + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > limit {
+        bail!("[E_BACKUP] 文件过大 / File too large");
+    }
+    Ok(bytes)
+}
+// Bind file capabilities to a completed task. Never use client-provided paths or reread
+// an editable journal to decide which file a later download may access.
+fn capture_artifacts(job: &Job) -> Result<JobArtifacts> {
+    let report = job.reporter.snapshot(0)?;
+    let loaded = &job.loaded;
+    let mut result = JobArtifacts::default();
+    result.locations.project = loaded.root.clone();
+    if report["command"] != "build" {
+        return Ok(result);
+    }
+    let changes = &report["result"]["changes"];
+    let targets = ["added", "modified", "removed", "unchanged"]
+        .iter()
+        .flat_map(|key| changes[key].as_array().into_iter().flatten())
+        .filter_map(Value::as_str)
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
+    let server = loaded.settings.server(&loaded.root).join("protocol");
+    let calc = loaded.settings.calc(&loaded.root).join("protocol");
+    let docs = loaded.settings.proto(&loaded.root).join("protocol.html");
+    for (slot, path, enabled) in [
+        (&mut result.locations.server, &server, true),
+        (
+            &mut result.locations.calc,
+            &calc,
+            loaded.settings.copy_to_calc,
+        ),
+    ] {
+        if enabled && path.is_dir() && targets.iter().any(|p| build::within(p, path)) {
+            build::reject_reparse_points(path)?;
+            *slot = Some(path.clone());
+        }
+    }
+    if loaded.settings.docs
+        && docs.is_file()
+        && targets
+            .iter()
+            .any(|p| util::path_key(p) == util::path_key(&docs))
+    {
+        build::reject_reparse_points(&docs)?;
+        result.locations.docs = Some(docs);
+    }
+    let Some(directory) = changes["backup"].as_str().map(PathBuf::from) else {
+        return Ok(result);
+    };
+    let state = util::project_state(
+        &loaded.root,
+        &loaded.settings.server(&loaded.root),
+        &loaded.settings.calc(&loaded.root),
+    )?;
+    let expected_parent = state.join("backups");
+    if !directory.is_absolute()
+        || directory
+            .parent()
+            .is_none_or(|p| util::path_key(p) != util::path_key(&expected_parent))
+    {
+        bail!("[E_BACKUP] 备份目录不属于此任务 / Backup directory is outside this task");
+    }
+    build::reject_reparse_points(&directory)?;
+    let journal: BackupIndex = serde_json::from_slice(&checked_file(
+        &directory.join("index.json"),
+        4 * 1024 * 1024,
+    )?)?;
+    if util::path_key(&journal.backup_dir) != util::path_key(&directory) {
+        bail!("[E_BACKUP] 备份索引目录不匹配 / Backup index directory mismatch");
+    }
+    let allowed = ["modified", "removed"]
+        .iter()
+        .flat_map(|key| changes[key].as_array().into_iter().flatten())
+        .filter_map(Value::as_str)
+        .map(|p| util::path_key(Path::new(p)))
+        .collect::<BTreeSet<_>>();
+    let mut seen = BTreeSet::new();
+    for (index, op) in journal.operations.into_iter().enumerate() {
+        let Some(backup) = op.backup else {
+            continue;
+        };
+        // The transaction also backs up its private manifest; never export it.
+        if util::path_key(&op.target) == util::path_key(&state.join("manifest.json")) {
+            continue;
+        }
+        if !allowed.contains(&util::path_key(&op.target))
+            || !seen.insert(util::path_key(&op.target))
+            || util::path_key(&backup) != util::path_key(&directory.join(format!("{index:06}.bak")))
+        {
+            bail!("[E_BACKUP] 备份索引超出任务范围 / Backup index exceeds this task's outputs");
+        }
+        let bytes = checked_file(&backup, MAX_BACKUP_BYTES)?;
+        let name = op
+            .target
+            .file_name()
+            .context("[E_BACKUP] Missing original file name")?
+            .to_string_lossy()
+            .into_owned();
+        result.backups.push(BackupFile {
+            target: op.target,
+            path: backup,
+            name,
+            sha256: util::hash(&bytes),
+            size: bytes.len() as u64,
+        });
+    }
+    result.locations.backup = Some(directory);
+    Ok(result)
+}
+#[derive(Deserialize)]
+struct BackupIndex {
+    backup_dir: PathBuf,
+    operations: Vec<BackupOperation>,
+}
+#[derive(Deserialize)]
+struct BackupOperation {
+    target: PathBuf,
+    backup: Option<PathBuf>,
+}
+fn download_backup(state: &State, route: &str) -> Result<(String, Vec<u8>)> {
+    let segments = route
+        .strip_prefix("/api/backup/")
+        .context("[E_WEB_NOT_FOUND] Invalid download")?
+        .split('/')
+        .collect::<Vec<_>>();
+    if segments.len() != 2 {
+        bail!("[E_WEB_NOT_FOUND] Invalid backup download");
+    }
+    let job = state.job(segments[0])?;
+    require_finished(&job)?;
+    let index: usize = segments[1]
+        .parse()
+        .context("[E_WEB_NOT_FOUND] Invalid backup index")?;
+    let artifacts = job.artifacts.lock().unwrap_or_else(|e| e.into_inner());
+    let artifacts = artifacts.as_ref().map_err(|e| anyhow::anyhow!(e.clone()))?;
+    let file = artifacts
+        .backups
+        .get(index)
+        .context("[E_WEB_NOT_FOUND] Backup not found")?;
+    let bytes = checked_file(&file.path, MAX_BACKUP_BYTES)?;
+    if bytes.len() as u64 != file.size || util::hash(&bytes) != file.sha256 {
+        bail!(
+            "[E_BACKUP_CHANGED] 备份已被修改，拒绝导出 / Backup changed since this task completed"
+        );
+    }
+    Ok((file.name.clone(), bytes))
+}
 fn configuration(loaded: &Loaded) -> Result<(PathBuf, String)> {
     let path = loaded
         .project_file
@@ -576,9 +847,25 @@ fn respond(request: Request, status: u16, mime: &str, bytes: Vec<u8>, download: 
         if let Ok(header) = Header::from_bytes(name,value) { response.add_header(header); }
     }
     if let Some(name) = download {
+        let encoded = name
+            .as_bytes()
+            .iter()
+            .map(|byte| {
+                if byte.is_ascii_alphanumeric() || b"-._~".contains(byte) {
+                    (*byte as char).to_string()
+                } else {
+                    format!("%{byte:02X}")
+                }
+            })
+            .collect::<String>();
+        let fallback = if name.is_ascii() && !name.contains(['"', '\\', '\r', '\n']) {
+            name.as_str()
+        } else {
+            "backup"
+        };
         if let Ok(header) = Header::from_bytes(
             "Content-Disposition",
-            format!("attachment; filename=\"{name}\""),
+            format!("attachment; filename=\"{fallback}\"; filename*=UTF-8''{encoded}"),
         ) {
             response.add_header(header);
         }

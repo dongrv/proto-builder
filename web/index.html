@@ -64,7 +64,7 @@
           ><span id="catalog-summary" data-i18n>正在读取项目</span>
         </div>
       </section>
-      <div id="notice" class="notice" role="alert" hidden></div>
+      <div id="notice" class="notice" hidden></div>
       <div class="workspace-grid">
         <section class="configuration" aria-labelledby="configuration-title">
           <form id="settings-form">
@@ -84,116 +84,128 @@
                     保存配置
                   </button>
                 </div>
-                <div
-                  id="setup-notice"
-                  class="setup-notice"
-                  role="status"
-                  hidden
-                >
-                  <strong data-i18n>请核对项目路径与环境变量</strong>
-                  <p data-i18n>
-                    团队配置缺失、无效或路径存在冲突，请核对下方信息。路径和名字会在编译成功后自动记住。
+                <p id="path-overview" class="path-overview"></p>
+                <details id="project-paths" class="project-paths" open>
+                  <summary id="project-paths-summary" data-i18n>
+                    核对项目路径
+                  </summary>
+                  <div
+                    id="setup-notice"
+                    class="setup-notice"
+                    role="status"
+                    hidden
+                  >
+                    <strong data-i18n>请核对项目路径与环境变量</strong>
+                    <p data-i18n>
+                      环境变量信息需要核对；下方已有路径仍可使用。请确认实际目录，编译成功后会记住路径和名字。
+                    </p>
+                    <ul id="setup-issues"></ul>
+                  </div>
+                  <label for="developer-name" data-i18n>开发者名字</label>
+                  <input id="developer-name" type="text" autocomplete="name" />
+                  <label for="root" data-i18n>协议项目根目录</label>
+                  <div class="input-row project-input">
+                    <input
+                      id="root"
+                      aria-describedby="root-help"
+                      autocomplete="off"
+                      spellcheck="false"
+                      placeholder="D:\work\go\src\shengyou\docs\branches\beta"
+                    /><button
+                      type="button"
+                      class="browse"
+                      data-browse="root"
+                      aria-label="选择协议项目根目录"
+                      title="选择协议项目根目录"
+                    >
+                      …</button
+                    ><button
+                      id="open-project"
+                      type="button"
+                      class="button small"
+                      data-i18n
+                    >
+                      加载项目
+                    </button>
+                  </div>
+                  <p
+                    id="root-changed-note"
+                    class="pending-note"
+                    role="status"
+                    hidden
+                  ></p>
+                  <p id="root-help" class="field-note" data-i18n>
+                    协议仓库的根目录，对应 ENV_PROTOBUF，通常包含 proto
+                    文件夹。业务服与计算服的 Go 工程路径分别填写在下方。
                   </p>
-                  <ul id="setup-issues"></ul>
-                </div>
-                <label for="developer-name" data-i18n>开发者名字</label>
-                <input id="developer-name" type="text" autocomplete="name" />
-                <label for="root" data-i18n>协议项目根目录</label>
-                <div class="input-row project-input">
-                  <input
-                    id="root"
-                    aria-describedby="root-help"
-                    autocomplete="off"
-                    spellcheck="false"
-                    placeholder="D:\work\go\src\shengyou\docs\branches\beta"
-                  /><button
-                    type="button"
-                    class="browse"
-                    data-browse="root"
-                    aria-label="选择协议项目根目录"
-                    title="选择协议项目根目录"
-                  >
-                    …</button
-                  ><button
-                    id="open-project"
-                    type="button"
-                    class="button small"
-                    data-i18n
-                  >
-                    打开项目
-                  </button>
-                </div>
-                <p id="root-help" class="field-note" data-i18n>
-                  协议仓库的根目录，对应 ENV_PROTOBUF，通常包含 proto
-                  文件夹。业务服与计算服的 Go 工程路径分别填写在下方。
-                </p>
-                <div class="path-fields">
-                  <div>
-                    <label for="proto-path" data-i18n>Proto 源文件目录</label>
-                    <div class="input-row">
-                      <input
-                        id="proto-path"
-                        spellcheck="false"
-                        autocomplete="off"
-                      /><button
-                        type="button"
-                        class="browse"
-                        data-browse="proto-path"
-                        aria-label="选择协议目录"
-                        title="选择协议目录"
-                      >
-                        …
-                      </button>
+                  <div class="path-fields">
+                    <div>
+                      <label for="proto-path" data-i18n>Proto 源文件目录</label>
+                      <div class="input-row">
+                        <input
+                          id="proto-path"
+                          spellcheck="false"
+                          autocomplete="off"
+                        /><button
+                          type="button"
+                          class="browse"
+                          data-browse="proto-path"
+                          aria-label="选择协议目录"
+                          title="选择协议目录"
+                        >
+                          …
+                        </button>
+                      </div>
+                    </div>
+                    <div>
+                      <label for="server-path" data-i18n>业务服目录</label>
+                      <div class="input-row">
+                        <input
+                          id="server-path"
+                          spellcheck="false"
+                          autocomplete="off"
+                        /><button
+                          type="button"
+                          class="browse"
+                          data-browse="server-path"
+                          aria-label="选择业务服目录"
+                          title="选择业务服目录"
+                        >
+                          …
+                        </button>
+                      </div>
+                    </div>
+                    <div>
+                      <label for="calc-path" data-i18n>计算服目录</label>
+                      <div class="input-row">
+                        <input
+                          id="calc-path"
+                          spellcheck="false"
+                          autocomplete="off"
+                        /><button
+                          type="button"
+                          class="browse"
+                          data-browse="calc-path"
+                          aria-label="选择计算服目录"
+                          title="选择计算服目录"
+                        >
+                          …
+                        </button>
+                      </div>
                     </div>
                   </div>
-                  <div>
-                    <label for="server-path" data-i18n>业务服目录</label>
-                    <div class="input-row">
-                      <input
-                        id="server-path"
-                        spellcheck="false"
-                        autocomplete="off"
-                      /><button
-                        type="button"
-                        class="browse"
-                        data-browse="server-path"
-                        aria-label="选择业务服目录"
-                        title="选择业务服目录"
-                      >
-                        …
-                      </button>
-                    </div>
-                  </div>
-                  <div>
-                    <label for="calc-path" data-i18n>计算服目录</label>
-                    <div class="input-row">
-                      <input
-                        id="calc-path"
-                        spellcheck="false"
-                        autocomplete="off"
-                      /><button
-                        type="button"
-                        class="browse"
-                        data-browse="calc-path"
-                        aria-label="选择计算服目录"
-                        title="选择计算服目录"
-                      >
-                        …
-                      </button>
-                    </div>
-                  </div>
-                </div>
-                <p class="field-note" data-i18n>
-                  Proto 源文件目录通常为根目录下的
-                  proto。相对路径以协议项目根目录为起点；路径和名字在编译成功后记住。
-                </p>
-                <details class="environment-info">
-                  <summary id="environment-summary"></summary>
                   <p class="field-note" data-i18n>
-                    以下是启动时从当前进程读取的环境变量；上方手动输入优先。修改
-                    Windows 环境变量后，请重新启动终端或启动本工具的应用。
+                    Proto 源文件目录通常为根目录下的
+                    proto。相对路径以协议项目根目录为起点；路径和名字在编译成功后记住。
                   </p>
-                  <dl id="environment-values"></dl>
+                  <details class="environment-info">
+                    <summary id="environment-summary"></summary>
+                    <p class="field-note" data-i18n>
+                      以下是启动时从当前进程读取的环境变量；上方手动输入优先。修改
+                      Windows 环境变量后，请重新启动终端或启动本工具的应用。
+                    </p>
+                    <dl id="environment-values"></dl>
+                  </details>
                 </details>
               </section>
               <section class="form-section">
@@ -224,6 +236,35 @@
                       aria-label="搜索活动 ID"
                       placeholder="搜索或输入 ID"
                     />
+                    <div class="picker-actions">
+                      <button
+                        type="button"
+                        class="text-button"
+                        id="add-activity"
+                        data-i18n
+                      >
+                        添加输入的 ID
+                      </button>
+                      <button
+                        type="button"
+                        class="text-button"
+                        id="clear-activity-search"
+                        data-i18n
+                      >
+                        清空搜索
+                      </button>
+                    </div>
+                    <p
+                      id="activity-pending"
+                      class="pending-note"
+                      role="status"
+                      hidden
+                    ></p>
+                    <div
+                      id="activity-selected"
+                      class="selected-tags"
+                      aria-label="已选 ID"
+                    ></div>
                     <div id="activity-options" class="choice-list"></div>
                   </section>
                   <section class="picker" aria-labelledby="machines-label">
@@ -238,6 +279,35 @@
                       aria-label="搜索机器 ID"
                       placeholder="搜索或输入 ID"
                     />
+                    <div class="picker-actions">
+                      <button
+                        type="button"
+                        class="text-button"
+                        id="add-machine"
+                        data-i18n
+                      >
+                        添加输入的 ID
+                      </button>
+                      <button
+                        type="button"
+                        class="text-button"
+                        id="clear-machine-search"
+                        data-i18n
+                      >
+                        清空搜索
+                      </button>
+                    </div>
+                    <p
+                      id="machine-pending"
+                      class="pending-note"
+                      role="status"
+                      hidden
+                    ></p>
+                    <div
+                      id="machine-selected"
+                      class="selected-tags"
+                      aria-label="已选 ID"
+                    ></div>
                     <div id="machine-options" class="choice-list"></div>
                   </section>
                 </div>
@@ -264,6 +334,25 @@
                       +
                     </button>
                   </div>
+                  <p
+                    id="exclude-pending"
+                    class="pending-note"
+                    role="status"
+                    hidden
+                  ></p>
+                  <button
+                    type="button"
+                    class="text-button"
+                    id="clear-exclude-search"
+                    data-i18n
+                  >
+                    清空搜索
+                  </button>
+                  <div
+                    id="exclude-selected"
+                    class="selected-tags"
+                    aria-label="已选排除目录"
+                  ></div>
                   <div
                     id="exclude-options"
                     class="choice-list directory-choices"
@@ -397,6 +486,17 @@
               </section>
             </fieldset>
           </form>
+          <div
+            class="execution-summary"
+            id="execution-summary"
+            aria-live="polite"
+          ></div>
+          <div
+            id="action-notice"
+            class="action-notice"
+            role="alert"
+            hidden
+          ></div>
           <div class="action-bar">
             <button type="button" class="button secondary" id="plan" disabled>
               <span aria-hidden="true">⌕</span
@@ -444,6 +544,13 @@
               ><span id="log-count" class="tab-count">0</span></button
             ><span class="elapsed" id="elapsed"></span>
           </div>
+          <div
+            id="snapshot-notice"
+            class="snapshot-notice"
+            role="status"
+            hidden
+          ></div>
+          <div id="result-actions" class="result-actions" hidden></div>
           <div class="run-progress" id="run-progress" hidden>
             <div>
               <span id="phase-text"></span
@@ -472,9 +579,22 @@
               <p id="completion-summary"></p>
             </div>
           </div>
-          <div id="error-box" class="error-box" hidden>
+          <div
+            id="error-box"
+            class="error-box"
+            role="alert"
+            tabindex="-1"
+            hidden
+          >
             <h3 id="error-title" data-i18n>本次操作已中止</h3>
-            <pre id="error-message"></pre>
+            <p id="error-summary"></p>
+            <p id="error-output-state"></p>
+            <p id="error-next-step"></p>
+            <div id="error-actions" class="result-actions"></div>
+            <details class="error-details">
+              <summary data-i18n>技术详情</summary>
+              <pre id="error-message"></pre>
+            </details>
             <div id="diagnostics"></div>
           </div>
           <section
@@ -700,6 +820,52 @@
           关闭工作台
         </button>
       </div>
+    </dialog>
+    <dialog
+      id="project-dialog"
+      class="dialog compact-dialog"
+      aria-labelledby="project-dialog-title"
+    >
+      <h2 id="project-dialog-title" data-i18n>当前设置尚未保存</h2>
+      <p data-i18n>
+        加载其他项目会放弃本页尚未保存的设置。可返回保存，或放弃后继续加载。
+      </p>
+      <div class="dialog-actions">
+        <button
+          type="button"
+          class="button secondary"
+          id="keep-project"
+          data-i18n
+        >
+          保留当前设置
+        </button>
+        <button
+          type="button"
+          class="button primary"
+          id="discard-project"
+          data-i18n
+        >
+          放弃并加载
+        </button>
+      </div>
+    </dialog>
+    <dialog id="backup-dialog" class="dialog" aria-labelledby="backup-title">
+      <div class="dialog-heading">
+        <h2 id="backup-title" data-i18n>本次生成物备份</h2>
+        <button
+          type="button"
+          class="close-dialog"
+          data-close="backup-dialog"
+          aria-label="关闭"
+        >
+          ×
+        </button>
+      </div>
+      <p class="field-note" data-i18n>
+        按原文件名导出备份；下载不会覆盖项目文件。
+      </p>
+      <p id="backup-path" class="mono"></p>
+      <div id="backup-files"></div>
     </dialog>
   </body>
 </html>

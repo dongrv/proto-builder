@@ -189,7 +189,7 @@ nav {
   line-height: 1;
 }
 .intro {
-  padding: 47px 0 36px;
+  padding: 28px 0;
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
@@ -618,7 +618,7 @@ input[type="checkbox"] {
 }
 .option-row {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 8px;
   flex-wrap: wrap;
 }
@@ -630,8 +630,8 @@ input[type="checkbox"] {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 17px;
-  height: 17px;
+  width: 30px;
+  height: 30px;
   border: 1px solid var(--line);
   border-radius: 50%;
   color: var(--muted);
@@ -663,7 +663,7 @@ input[type="checkbox"] {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  font-size: 10px;
+  font-size: 12px;
   color: var(--muted);
   cursor: pointer;
 }
@@ -1577,5 +1577,193 @@ progress:indeterminate {
     animation: none !important;
     transition: none !important;
     scroll-behavior: auto !important;
+  }
+}
+
+/* Working context stays readable while detailed controls remain optional. */
+.project-paths > summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--ink);
+}
+.project-paths[open] > summary {
+  margin-bottom: 14px;
+}
+.path-overview {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+  margin: 0 0 14px;
+}
+.path-overview span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.picker-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 5px 0;
+}
+.picker-actions button {
+  min-height: 30px;
+  font-size: 12px;
+}
+.selected-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0;
+}
+.selection-tag {
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--soft-accent);
+  color: var(--accent);
+  font: 12px var(--mono);
+  min-height: 30px;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.selection-tag:hover {
+  background: var(--hover);
+}
+.pending-note {
+  color: var(--accent);
+  font-size: 12px;
+  line-height: 1.65;
+  margin: 6px 0;
+}
+.execution-summary {
+  display: grid;
+  gap: 4px;
+  padding: 15px 26px;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.execution-summary strong {
+  color: var(--ink);
+  font-weight: 500;
+  font-size: 13px;
+}
+.summary-path {
+  font-family: var(--mono);
+}
+.action-notice {
+  padding: 12px 26px;
+  background: var(--soft-accent);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.snapshot-notice {
+  padding: 12px 26px;
+  border-left: 3px solid var(--accent);
+  background: var(--soft-accent);
+  font-size: 13px;
+}
+.completion-box.stale {
+  background: var(--surface-2);
+  border-color: var(--muted);
+}
+.result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 26px;
+}
+.error-box .result-actions {
+  padding: 8px 0;
+}
+.error-box > p {
+  font-family: var(--sans);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.error-details {
+  margin-top: 12px;
+}
+.error-details summary {
+  cursor: pointer;
+  font-size: 12px;
+}
+.field-note,
+.option-help-content,
+.result-note {
+  font-size: 12px;
+}
+.file-path {
+  font-size: 12px;
+}
+.file-row {
+  gap: 10px;
+  align-items: center;
+}
+.file-row .button {
+  flex: none;
+  padding: 4px 7px;
+  font-size: 11px;
+}
+.result-group-title {
+  padding: 12px 0 6px;
+  color: var(--ink);
+  font-size: 13px;
+}
+.check-result details {
+  margin-top: 8px;
+}
+.check-result summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+}
+.backup-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+.backup-row > div {
+  min-width: 0;
+}
+.backup-row p {
+  overflow-wrap: anywhere;
+  margin: 5px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.backup-row button {
+  flex: none;
+}
+#backup-files {
+  max-height: 55vh;
+  overflow: auto;
+}
+#backup-path {
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+[aria-invalid="true"] {
+  border-color: var(--accent) !important;
+}
+@media (max-width: 600px) {
+  .file-row {
+    flex-wrap: wrap;
+  }
+  .execution-summary,
+  .action-notice,
+  .snapshot-notice,
+  .result-actions {
+    padding-inline: 20px;
+  }
+  .backup-row {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }

@@ -1,4 +1,4 @@
-use crate::{agent, util};
+use crate::{agent, failure, util};
 use anyhow::{Context, Result};
 use serde::Serialize;
 use serde_json::Value;
@@ -36,7 +36,7 @@ pub struct Report {
     pub events: Vec<Event>,
     pub diagnostics: Vec<Diagnostic>,
     pub error: Option<String>,
-    pub failure: Option<agent::Failure>,
+    pub failure: Option<failure::Failure>,
     pub output_state: &'static str,
     pub generated_files_changed: Option<bool>,
     pub recovered_previous_transaction: bool,
@@ -54,7 +54,7 @@ pub struct Reporter {
     start: Instant,
     pub json: bool,
     pub verbose: bool,
-    pub agent: bool,
+    pub automation: bool,
     print_json: bool,
     english: Arc<AtomicBool>,
     retention: Arc<AtomicUsize>,
@@ -86,20 +86,20 @@ impl Reporter {
             start: Instant::now(),
             json,
             verbose,
-            agent: false,
+            automation: false,
             print_json: json,
             english: Arc::new(AtomicBool::new(lang == "en-US")),
             retention: Arc::new(AtomicUsize::new(20)),
             last_progress_ms: Arc::new(AtomicU64::new(0)),
         }
     }
-    pub fn for_agent(command: &str, verbose: bool, lang: &str) -> Self {
+    pub fn for_automation(command: &str, verbose: bool, lang: &str) -> Self {
         let mut report = Self::new(command, true, verbose, lang);
-        report.agent = true;
+        report.automation = true;
         report.print_json = false;
         report
     }
-    pub fn agent_output(&self, storage: &Result<PathBuf>) -> Value {
+    pub fn response(&self, storage: Option<&Result<PathBuf>>) -> Value {
         let report = self.report.lock().unwrap_or_else(|e| e.into_inner());
         redact_value(agent::envelope(&report, storage))
     }
@@ -131,6 +131,9 @@ impl Reporter {
             "exit_code":report.exit_code,"phase":report.phase,
             "duration_seconds":if report.status == "running" {self.start.elapsed().as_secs_f64()} else {report.duration_seconds},
             "context":report.context,"result":report.result,"error":report.error,
+            "failure":report.failure,"output_state":report.output_state,
+            "generated_files_changed":report.generated_files_changed,
+            "recovered_previous_transaction":report.recovered_previous_transaction,
             "diagnostics":report.diagnostics,"events":&report.events[after.min(count)..],"event_count":count
         }))
     }
@@ -147,7 +150,7 @@ impl Reporter {
     }
     pub fn emit(&self, phase: &str, level: &'static str, message: impl Into<String>) {
         let message = redact(&message.into());
-        let progress_visible = !self.agent
+        let progress_visible = !self.automation
             || self.verbose
             || level != "info"
             || (phase != "select"
@@ -159,8 +162,12 @@ impl Reporter {
                             (now.saturating_sub(last) >= 250).then_some(now)
                         })
                         .is_ok()));
-        if progress_visible && (!self.json || self.agent) && (level != "debug" || self.verbose) {
-            if !self.agent && io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none() {
+        if progress_visible && (!self.json || self.automation) && (level != "debug" || self.verbose)
+        {
+            if !self.automation
+                && io::stderr().is_terminal()
+                && std::env::var_os("NO_COLOR").is_none()
+            {
                 let color = match level {
                     "error" => 31,
                     "warning" => 33,
@@ -199,7 +206,7 @@ impl Reporter {
     pub fn result(&self, value: Value) {
         self.report.lock().unwrap_or_else(|e| e.into_inner()).result = redact_value(value);
     }
-    pub fn finish(&self, outcome: &Result<()>, explicit: Option<&Path>) -> Result<PathBuf> {
+    fn finalize(&self, outcome: &Result<()>) {
         let mut report = self.report.lock().unwrap_or_else(|e| e.into_inner());
         report.duration_seconds = self.start.elapsed().as_secs_f64();
         report.status = if outcome.is_ok() { "success" } else { "failed" }.into();
@@ -237,9 +244,23 @@ impl Reporter {
                     }
                 }
             }
-            report.failure = Some(agent::Failure::from_error(error, &report.diagnostics));
+            report.failure = Some(failure::Failure::from_error(error, &report.diagnostics));
             report.error = Some(message);
         }
+    }
+    /// Read-only discovery/report queries must not rotate away the report being read.
+    pub fn finish_in_memory(&self, outcome: &Result<()>) -> Value {
+        self.finalize(outcome);
+        self.response(None)
+    }
+    /// Finalize a complete internal report without persisting or rendering it.
+    pub fn finish_snapshot(&self, outcome: &Result<()>) -> Result<Value> {
+        self.finalize(outcome);
+        self.snapshot(0)
+    }
+    pub fn finish(&self, outcome: &Result<()>, explicit: Option<&Path>) -> Result<PathBuf> {
+        self.finalize(outcome);
+        let report = self.report.lock().unwrap_or_else(|e| e.into_inner());
         let dir = util::data_dir()?.join("logs");
         let path = dir.join(format!("{}.json", report.run_id));
         fs::create_dir_all(&dir)?;
@@ -383,6 +404,53 @@ fn remove_if_present(path: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn finish_snapshot_keeps_the_complete_internal_contract() {
+        let report = Reporter::new("report", true, false, "en-US");
+        report.info("read", "Loaded the requested report");
+        report.result(serde_json::json!({"items":[1,2,3]}));
+        let value = report.finish_snapshot(&Ok(())).unwrap();
+        assert_eq!(value["schema_version"], 1);
+        assert_eq!(value["status"], "success");
+        assert_eq!(value["exit_code"], 0);
+        assert_eq!(value["events"].as_array().unwrap().len(), 1);
+        assert_eq!(value["result"]["items"], serde_json::json!([1, 2, 3]));
+        assert!(value.get("api_version").is_none());
+        assert!(value.get("report").is_none());
+    }
+
+    #[test]
+    fn web_snapshot_preserves_failure_and_uncertain_recovery_state() {
+        let report = Reporter::for_web("build", "en-US", 20);
+        report.info("recovery", "Restoring an interrupted build");
+        report.outputs("recovering", None);
+        report.outputs("recovered", None);
+        let error = anyhow::anyhow!("[E_OUTPUT_SCOPE] overlapping output roots");
+        {
+            let mut stored = report.report.lock().unwrap();
+            stored.status = "failed".into();
+            stored.failure = Some(failure::Failure::from_error(&error, &[]));
+            stored.error = Some(error.to_string());
+        }
+        let snapshot = report.snapshot(1).unwrap();
+        assert_eq!(snapshot["failure"]["kind"], "invalid_paths");
+        assert_eq!(snapshot["failure"]["suggested_action"], "correct_paths");
+        assert_eq!(snapshot["output_state"], "recovered");
+        assert!(snapshot["generated_files_changed"].is_null());
+        assert_eq!(snapshot["recovered_previous_transaction"], true);
+        assert_eq!(snapshot["event_count"], 1);
+        assert!(snapshot["events"].as_array().unwrap().is_empty());
+    }
+    #[test]
+    fn web_snapshot_distinguishes_committed_outputs_from_unwritten_outputs() {
+        let report = Reporter::for_web("build", "en-US", 20);
+        assert_eq!(report.snapshot(0).unwrap()["output_state"], "not_written");
+        report.outputs("committed", Some(true));
+        let snapshot = report.snapshot(0).unwrap();
+        assert_eq!(snapshot["output_state"], "committed");
+        assert_eq!(snapshot["generated_files_changed"], true);
+        assert_eq!(snapshot["recovered_previous_transaction"], false);
+    }
     #[test]
     fn diagnostics_accept_windows_drive_and_column() {
         let d = diagnostics("D:/路径/sample.proto:12:4: invalid field\ncmd/a.proto:2: bad enum\n[E_PROTOCOL] D:/project/proto/a.proto:8: duplicate protocol ID");

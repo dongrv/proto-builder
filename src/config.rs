@@ -155,6 +155,109 @@ impl Settings {
         }
     }
 }
+/// Transport-independent explicit configuration overrides.
+/// None inherits a value; Some(vec![]) explicitly clears a filter.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ConfigOverrides {
+    pub config: Option<PathBuf>,
+    pub repo_root: Option<PathBuf>,
+    pub proto_path: Option<PathBuf>,
+    pub server_path: Option<PathBuf>,
+    pub calc_path: Option<PathBuf>,
+    pub developer_name: Option<String>,
+    pub activity_ids: Option<Vec<String>>,
+    pub machine_ids: Option<Vec<String>>,
+    pub excludes: Option<Vec<String>>,
+    pub assign_id: Option<u64>,
+    pub docs: Option<bool>,
+    pub protocol_config: Option<bool>,
+    pub copy_to_calc: Option<bool>,
+    pub svn_update: Option<bool>,
+    pub jobs: Option<usize>,
+    pub timeout_seconds: Option<u64>,
+    pub lang: Option<String>,
+}
+impl From<&Options> for ConfigOverrides {
+    fn from(options: &Options) -> Self {
+        fn filter(values: &[String]) -> Option<Vec<String>> {
+            (!values.is_empty()).then(|| values.iter().filter(|s| !s.is_empty()).cloned().collect())
+        }
+        Self {
+            config: options.config.clone(),
+            repo_root: options.repo_root.clone(),
+            proto_path: options.proto_path.clone(),
+            server_path: options.server_path.clone(),
+            calc_path: options.calc_path.clone(),
+            developer_name: options.developer_name.clone(),
+            activity_ids: filter(&options.activity_ids),
+            machine_ids: filter(&options.machine_ids),
+            excludes: filter(&options.excludes),
+            assign_id: options.assign_id,
+            docs: if options.no_docs {
+                Some(false)
+            } else {
+                options.docs
+            },
+            protocol_config: if options.no_config {
+                Some(false)
+            } else {
+                options.protocol_config
+            },
+            copy_to_calc: if options.no_copy {
+                Some(false)
+            } else {
+                options.copy_to_calc
+            },
+            svn_update: if options.no_svn_update {
+                Some(false)
+            } else {
+                options.svn_update
+            },
+            jobs: options.jobs,
+            timeout_seconds: options.timeout_seconds,
+            lang: options.lang.clone(),
+        }
+    }
+}
+#[derive(Debug, Clone)]
+enum OverrideSource {
+    Cli(BTreeMap<&'static str, &'static str>),
+    Request,
+}
+impl OverrideSource {
+    fn cli(options: &Options) -> Self {
+        let mut names = BTreeMap::new();
+        for (field, active, flag) in [
+            ("docs", options.no_docs, "--no-docs"),
+            ("protocol_config", options.no_config, "--no-config"),
+            ("copy_to_calc", options.no_copy, "--no-copy"),
+            ("svn.update", options.no_svn_update, "--no-svn-update"),
+        ] {
+            if active {
+                names.insert(field, flag);
+            }
+        }
+        Self::Cli(names)
+    }
+    fn origin(&self, field: &str, cli_name: &str) -> (&'static str, String) {
+        match self {
+            Self::Cli(names) => ("cli", names.get(field).copied().unwrap_or(cli_name).into()),
+            Self::Request => (
+                "request",
+                format!(
+                    "params.options.{}",
+                    if field == "svn.update" {
+                        "svn_update"
+                    } else {
+                        field
+                    }
+                ),
+            ),
+        }
+    }
+}
+
 pub fn load(options: &Options) -> Result<Loaded> {
     load_from(options, &env::current_dir()?, Some(&util::user_config()?))
 }
@@ -163,6 +266,30 @@ pub fn load_from(options: &Options, cwd: &Path, user: Option<&Path>) -> Result<L
 }
 fn load_with_team(
     options: &Options,
+    cwd: &Path,
+    user: Option<&Path>,
+    team: &setup::Team,
+) -> Result<Loaded> {
+    load_config(
+        &ConfigOverrides::from(options),
+        &OverrideSource::cli(options),
+        cwd,
+        user,
+        team,
+    )
+}
+pub fn load_overrides(options: &ConfigOverrides) -> Result<Loaded> {
+    load_config(
+        options,
+        &OverrideSource::Request,
+        &env::current_dir()?,
+        Some(&util::user_config()?),
+        &setup::Team::read(),
+    )
+}
+fn load_config(
+    options: &ConfigOverrides,
+    source: &OverrideSource,
     cwd: &Path,
     user: Option<&Path>,
     team: &setup::Team,
@@ -226,7 +353,8 @@ fn load_with_team(
     let env_root =
         env::var_os("PROTO_BUILDER_PROJECT_ROOT").map(|p| util::absolute(cwd, Path::new(&p)));
     let root_source = if options.repo_root.is_some() {
-        ("cli".to_owned(), "--repo-root".to_owned())
+        let (kind, name) = source.origin("repo_root", "--repo-root");
+        (kind.to_owned(), name)
     } else if env_root.is_some() {
         ("environment".into(), "PROTO_BUILDER_PROJECT_ROOT".into())
     } else if options.config.is_none() && team.root.is_some() {
@@ -372,14 +500,14 @@ fn load_with_team(
     if let Some(v) = options.assign_id {
         settings.assign_id = v;
     }
-    if !options.activity_ids.is_empty() {
-        settings.activity_ids = options.activity_ids.clone();
+    if let Some(values) = &options.activity_ids {
+        settings.activity_ids = values.clone();
     }
-    if !options.machine_ids.is_empty() {
-        settings.machine_ids = options.machine_ids.clone();
+    if let Some(values) = &options.machine_ids {
+        settings.machine_ids = values.clone();
     }
-    if !options.excludes.is_empty() {
-        settings.excludes = options.excludes.clone();
+    if let Some(values) = &options.excludes {
+        settings.excludes = values.clone();
     }
     if let Some(v) = options.jobs {
         settings.jobs = v;
@@ -405,21 +533,9 @@ fn load_with_team(
     settings.activity_ids.retain(|v| !v.is_empty());
     settings.machine_ids.retain(|v| !v.is_empty());
     settings.excludes.retain(|v| !v.is_empty());
-    if options.no_docs {
-        settings.docs = false;
-    }
-    if options.no_config {
-        settings.protocol_config = false;
-    }
-    if options.no_copy {
-        settings.copy_to_calc = false;
-    }
-    if options.no_svn_update {
-        settings.svn.update = false;
-    }
     validate(&settings)?;
     let final_values = provenance::flatten(&serde_json::to_value(&settings)?);
-    for (key, present, name) in [
+    for (key, present, cli_name) in [
         ("proto_path", options.proto_path.is_some(), "--proto-path"),
         (
             "server_path",
@@ -435,15 +551,11 @@ fn load_with_team(
         ("assign_id", options.assign_id.is_some(), "--assign-id"),
         (
             "activity_ids",
-            !options.activity_ids.is_empty(),
+            options.activity_ids.is_some(),
             "--activity-id",
         ),
-        (
-            "machine_ids",
-            !options.machine_ids.is_empty(),
-            "--machine-id",
-        ),
-        ("excludes", !options.excludes.is_empty(), "--exclude"),
+        ("machine_ids", options.machine_ids.is_some(), "--machine-id"),
+        ("excludes", options.excludes.is_some(), "--exclude"),
         ("jobs", options.jobs.is_some(), "--jobs"),
         (
             "timeout_seconds",
@@ -451,45 +563,22 @@ fn load_with_team(
             "--timeout-seconds",
         ),
         ("lang", options.lang.is_some(), "--lang"),
-        (
-            "docs",
-            options.docs.is_some() || options.no_docs,
-            if options.no_docs {
-                "--no-docs"
-            } else {
-                "--docs"
-            },
-        ),
+        ("docs", options.docs.is_some(), "--docs"),
         (
             "protocol_config",
-            options.protocol_config.is_some() || options.no_config,
-            if options.no_config {
-                "--no-config"
-            } else {
-                "--protocol-config"
-            },
+            options.protocol_config.is_some(),
+            "--protocol-config",
         ),
         (
             "copy_to_calc",
-            options.copy_to_calc.is_some() || options.no_copy,
-            if options.no_copy {
-                "--no-copy"
-            } else {
-                "--copy-to-calc"
-            },
+            options.copy_to_calc.is_some(),
+            "--copy-to-calc",
         ),
-        (
-            "svn.update",
-            options.svn_update.is_some() || options.no_svn_update,
-            if options.no_svn_update {
-                "--no-svn-update"
-            } else {
-                "--svn-update"
-            },
-        ),
+        ("svn.update", options.svn_update.is_some(), "--svn-update"),
     ] {
         if present {
-            origins.record(key, final_values[key].clone(), "cli", name);
+            let (kind, name) = source.origin(key, cli_name);
+            origins.record(key, final_values[key].clone(), kind, &name);
         }
     }
     Ok(Loaded {
@@ -693,6 +782,90 @@ mod tests {
         assert!(!loaded.settings.svn.update);
         assert_eq!(loaded.settings.timeout_seconds, 180);
         assert_eq!(loaded.root, root);
+    }
+    #[test]
+    fn native_overrides_clear_filters_and_record_request_provenance() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("config.toml");
+        fs::write(&file, "config_version=1\nactivity_ids=['7001']\nmachine_ids=['5001']\nexcludes=['draft']\ndocs=true\n[svn]\nupdate=true\n").unwrap();
+        let overrides = ConfigOverrides {
+            config: Some(file),
+            repo_root: Some(dir.path().into()),
+            activity_ids: Some(vec![]),
+            machine_ids: Some(vec![]),
+            excludes: Some(vec![]),
+            docs: Some(false),
+            svn_update: Some(false),
+            ..Default::default()
+        };
+        let loaded = load_config(
+            &overrides,
+            &OverrideSource::Request,
+            dir.path(),
+            None,
+            &setup::Team::default(),
+        )
+        .unwrap();
+        assert!(loaded.settings.activity_ids.is_empty());
+        assert!(loaded.settings.machine_ids.is_empty());
+        assert!(loaded.settings.excludes.is_empty());
+        assert!(!loaded.settings.docs);
+        assert!(!loaded.settings.svn.update);
+        for (key, field) in [
+            ("project_root", "repo_root"),
+            ("activity_ids", "activity_ids"),
+            ("machine_ids", "machine_ids"),
+            ("excludes", "excludes"),
+            ("docs", "docs"),
+            ("svn.update", "svn_update"),
+        ] {
+            let origin = loaded.origins.0[key].last().unwrap();
+            assert_eq!(origin.kind, "request");
+            assert_eq!(origin.name, format!("params.options.{field}"));
+        }
+        assert_eq!(
+            loaded.origins.0["activity_ids"].last().unwrap().value,
+            serde_json::json!([])
+        );
+    }
+    #[test]
+    fn cli_negative_flags_and_explicit_empty_filters_keep_their_sources() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("config.toml");
+        fs::write(
+            &file,
+            "config_version=1\nactivity_ids=['7001']\nexcludes=['draft']\n",
+        )
+        .unwrap();
+        let options = Options {
+            config: Some(file),
+            repo_root: Some(dir.path().into()),
+            activity_ids: vec![String::new()],
+            excludes: vec![String::new()],
+            docs: Some(true),
+            protocol_config: Some(true),
+            copy_to_calc: Some(true),
+            svn_update: Some(true),
+            no_docs: true,
+            no_config: true,
+            no_copy: true,
+            no_svn_update: true,
+            ..Default::default()
+        };
+        let loaded = load_with_team(&options, dir.path(), None, &setup::Team::default()).unwrap();
+        assert!(loaded.settings.activity_ids.is_empty());
+        assert!(loaded.settings.excludes.is_empty());
+        for (key, flag) in [
+            ("docs", "--no-docs"),
+            ("protocol_config", "--no-config"),
+            ("copy_to_calc", "--no-copy"),
+            ("svn.update", "--no-svn-update"),
+        ] {
+            let origin = loaded.origins.0[key].last().unwrap();
+            assert_eq!(origin.kind, "cli");
+            assert_eq!(origin.name, flag);
+            assert_eq!(origin.value, false);
+        }
     }
     #[test]
     fn unknown_keys_and_future_versions_are_errors() {

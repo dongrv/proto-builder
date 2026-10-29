@@ -1,10 +1,10 @@
 //! Versioned, bounded process interface. Full evidence remains in the normal report.
-use crate::report::{Diagnostic, Report};
+use crate::{failure::Failure, report::Report};
 use serde::Serialize;
 use serde_json::{json, Value};
-use std::{collections::BTreeSet, fmt, path::PathBuf};
+use std::path::PathBuf;
 
-pub const SCHEMA_VERSION: u32 = 1;
+pub use crate::api_contract::API_VERSION;
 const INLINE_LIMIT: usize = 20;
 
 pub fn export_skill(
@@ -37,125 +37,108 @@ pub fn export_skill(
     Ok(())
 }
 
-#[derive(Clone, Debug, Serialize)]
-pub struct Conflict {
-    pub file: PathBuf,
-    pub kind: &'static str,
+#[derive(Serialize)]
+struct Response<'a> {
+    api: &'static str,
+    api_version: u32,
+    request_id: Option<&'a str>,
+    operation: Option<&'a str>,
+    tool: ToolIdentity,
+    run: RunIdentity<'a>,
+    status: &'static str,
+    exit_code: i32,
+    context: &'a Value,
+    result: Value,
+    output: OutputState,
+    error: Option<Value>,
+    diagnostics: DiagnosticPage,
+    warnings: WarningCount,
+    report: ReportStorage<'a>,
 }
-#[derive(Debug)]
-pub struct OutputConflict(pub Vec<Conflict>);
-impl fmt::Display for OutputConflict {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "[E_OUTPUT_CONFLICT] output transaction aborted; no generated files changed / 写回已中止:")?;
-        for item in &self.0 {
-            let label = match item.kind {
-                "unowned_output" => "unowned / 尚未接管 (review --adopt-existing)",
-                "modified_stale_output" => {
-                    "modified stale file / 已修改的过期产物 (review --force)"
-                }
-                _ => "modified / 用户已修改 (review --force)",
-            };
-            writeln!(f, "{label}: {}", item.file.display())?;
-        }
-        Ok(())
-    }
+#[derive(Serialize)]
+struct ToolIdentity {
+    name: &'static str,
+    version: &'static str,
 }
-impl std::error::Error for OutputConflict {}
+#[derive(Serialize)]
+struct RunIdentity<'a> {
+    id: &'a str,
+    duration_seconds: f64,
+}
+#[derive(Serialize)]
+struct OutputState {
+    state: &'static str,
+    changed: Option<bool>,
+    recovered_previous_transaction: bool,
+}
+#[derive(Serialize)]
+struct DiagnosticPage {
+    items: Vec<Value>,
+    total: usize,
+    truncated: bool,
+}
+#[derive(Serialize)]
+struct WarningCount {
+    count: usize,
+}
+#[derive(Serialize)]
+struct ReportStorage<'a> {
+    path: Option<&'a PathBuf>,
+    error: Option<String>,
+}
 
-#[derive(Debug, Clone, Serialize)]
-pub struct Failure {
-    pub code: String,
-    pub kind: &'static str,
-    pub retryable: bool,
-    pub suggested_action: &'static str,
-    pub files: Vec<String>,
-    pub conflicts: Vec<Conflict>,
-}
-impl Failure {
-    pub fn from_error(error: &anyhow::Error, diagnostics: &[Diagnostic]) -> Self {
-        let text = format!("{error:#}");
-        let re = regex::Regex::new(r"\[(E_[A-Z_]+)\]").expect("constant regex");
-        let codes = re
-            .captures_iter(&text)
-            .map(|c| c[1].to_owned())
-            .collect::<Vec<_>>();
-        let code = codes
-            .iter()
-            .find(|c| c.as_str() == "E_CANCELLED")
-            .or_else(|| codes.iter().find(|c| c.as_str() != "E_BUILD"))
-            .or_else(|| codes.first())
-            .cloned()
-            .unwrap_or_else(|| "E_EXECUTION".into());
-        let conflicts = error
-            .downcast_ref::<OutputConflict>()
-            .map(|c| c.0.clone())
-            .unwrap_or_default();
-        let (kind, retryable, suggested_action) = match code.as_str() {
-            "E_OUTPUT_CONFLICT" => {
-                let kinds = conflicts.iter().map(|c| c.kind).collect::<BTreeSet<_>>();
-                (
-                    if kinds.len() == 1 {
-                        *kinds.first().unwrap()
-                    } else {
-                        "output_conflict"
-                    },
-                    false,
-                    "review_existing_outputs",
-                )
-            }
-            "E_CANCELLED" => ("cancelled", false, "resume_if_requested"),
-            "E_LOCKED" => ("target_busy", true, "retry_after_current_build"),
-            "E_CONFIG_CHANGED" | "E_INPUT_CHANGED" => {
-                ("inputs_changed", true, "reload_configuration_and_plan")
-            }
-            "E_ARGUMENT" | "E_FILTER" => ("invalid_arguments", false, "correct_arguments"),
-            "E_NO_MATCH" => ("no_matching_protocols", false, "review_filters"),
-            "E_SVN_CONFLICT" => ("svn_conflict", false, "resolve_svn_conflicts"),
-            "E_OUTPUT_SCOPE" | "E_PATH" => ("invalid_paths", false, "correct_paths"),
-            "E_PROTOCOL" | "E_IMPORT" | "E_INPUT" | "E_ID" => {
-                ("invalid_protocols", false, "correct_protocol_sources")
-            }
-            "E_TIMEOUT" => ("process_timeout", false, "inspect_timeout_and_process"),
-            "E_REPORT" => (
-                "report_storage",
-                false,
-                "check_report_storage_and_output_state",
-            ),
-            "E_RECOVERY" | "E_COMMIT" => (
-                "output_transaction",
-                false,
-                "inspect_output_state_and_recovery",
-            ),
-            "E_PROCESS" if !diagnostics.is_empty() => {
-                ("invalid_protocols", false, "correct_protocol_sources")
-            }
-            "E_PROCESS" => ("subprocess_failed", false, "inspect_process_diagnostics"),
-            v if v.starts_with("E_SVN") => ("svn_failed", false, "inspect_svn_failure"),
-            v if v.starts_with("E_CONFIG") => {
-                ("invalid_configuration", false, "correct_configuration")
-            }
-            v if v.starts_with("E_TOOLCHAIN") => ("toolchain_failed", false, "check_toolchain"),
-            "E_INTEGRITY" | "E_SIGNATURE" | "E_TRUST_KEY" => {
-                ("integrity_failed", false, "verify_official_release")
-            }
-            _ => ("execution_failed", false, "inspect_full_report"),
-        };
-        let files = diagnostics
-            .iter()
-            .map(|d| d.file.clone())
-            .chain(conflicts.iter().map(|c| c.file.display().to_string()))
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
-        Self {
-            code,
-            kind,
-            retryable,
-            suggested_action,
-            files,
-            conflicts,
+/// The same response contract is advertised to JSON callers and MCP clients.
+pub fn response_schema() -> Value {
+    let output = json!({
+        "type":"object","required":["state","changed","recovered_previous_transaction"],"additionalProperties":false,
+        "properties":{
+            "state":{"type":"string","enum":["not_written","writing","committed","rolled_back","recovering","recovered","recovery_required"]},
+            "changed":{"type":["boolean","null"]},"recovered_previous_transaction":{"type":"boolean"}
         }
-    }
+    });
+    let error = json!({
+        "type":"object","required":["code","kind","message","retryable","suggested_action","files","file_count","conflicts","conflict_count"],"additionalProperties":false,
+        "properties":{
+            "code":{"type":"string"},"kind":{"type":"string"},"message":{"type":["string","null"],"maxLength":1201},
+            "retryable":{"type":"boolean"},"suggested_action":{"type":"string"},
+            "files":{"type":"array","maxItems":INLINE_LIMIT,"items":{"type":"string"}},"file_count":{"type":"integer","minimum":0},
+            "conflicts":{"type":"array","maxItems":INLINE_LIMIT,"items":{"type":"object","required":["file","kind"],"additionalProperties":false,"properties":{"file":{"type":"string"},"kind":{"type":"string"}}}},
+            "conflict_count":{"type":"integer","minimum":0}
+        }
+    });
+    let diagnostic = json!({
+        "type":"object","required":["file","line","column","message"],"additionalProperties":false,
+        "properties":{
+            "file":{"type":"string"},"line":{"type":"integer","minimum":0},
+            "column":{"type":["integer","null"],"minimum":0},"message":{"type":"string","maxLength":1201}
+        }
+    });
+    let diagnostics = json!({
+        "type":"object","required":["items","total","truncated"],"additionalProperties":false,
+        "properties":{"items":{"type":"array","maxItems":INLINE_LIMIT,"items":diagnostic},"total":{"type":"integer","minimum":0},"truncated":{"type":"boolean"}}
+    });
+    json!({
+        "type":"object",
+        "required":["api","api_version","request_id","operation","tool","run","status","exit_code","context","result","output","error","diagnostics","warnings","report"],
+        "additionalProperties":false,
+        "properties":{
+            "api":{"type":"string","const":"proto-builder.agent"},
+            "api_version":{"type":"integer","const":API_VERSION},
+            "request_id":{"type":["string","null"],"maxLength":128},
+            "operation":{"type":["string","null"]},
+            "tool":{"type":"object","required":["name","version"],"additionalProperties":false,"properties":{"name":{"type":"string","const":"proto-builder"},"version":{"type":"string"}}},
+            "run":{"type":"object","required":["id","duration_seconds"],"additionalProperties":false,"properties":{"id":{"type":"string"},"duration_seconds":{"type":"number","minimum":0}}},
+            "status":{"type":"string","enum":["success","blocked","failed","cancelled"]},
+            "exit_code":{"type":"integer","minimum":0},
+            "context":{"type":["object","null"]},
+            "result":{},
+            "output":output,
+            "error":{"anyOf":[{"type":"null"},error]},
+            "diagnostics":diagnostics,
+            "warnings":{"type":"object","required":["count"],"additionalProperties":false,"properties":{"count":{"type":"integer","minimum":0}}},
+            "report":{"type":"object","required":["path","error"],"additionalProperties":false,"properties":{"path":{"type":["string","null"]},"error":{"type":["string","null"],"maxLength":1201}}}
+        }
+    })
 }
 
 fn bounded(text: &str) -> String {
@@ -172,11 +155,11 @@ fn summary(report: &Report) -> Value {
     match report.command.as_str() {
         "build" if r.get("changes").is_some() => {
             let c = &r["changes"];
-            json!({"proto_files":r["proto_files"],"documentation_proto_files":r["documentation_proto_files"],"groups":r["groups"],"commands":r["commands"],
+            json!({"counts":{"proto_files":r["proto_files"],"documentation_proto_files":r["documentation_proto_files"],"groups":r["groups"],"commands":r["commands"]},
                 "changes":{"added":c["added"].as_array().map(Vec::len),"modified":c["modified"].as_array().map(Vec::len),"removed":c["removed"].as_array().map(Vec::len),"unchanged":c["unchanged"].as_array().map(Vec::len),"adopted":c["adopted"].as_array().map(Vec::len)},"backup":c["backup"]})
         }
         "plan" | "build" if r.get("scanned").is_some() => {
-            json!({"scanned":r["scanned"],"selected":r["selected"].as_array().map(Vec::len),"documentation_proto_files":r["documentation_inputs"].as_array().map(Vec::len),"groups":r["groups"].as_object().map(serde_json::Map::len),"excluded":r["excluded"].as_array().map(Vec::len),"filtered":r["filtered"].as_array().map(Vec::len),"import_only":r["import_only"].as_array().map(Vec::len),"full_build":r["full_build"]})
+            json!({"counts":{"scanned":r["scanned"],"selected":r["selected"].as_array().map(Vec::len),"documentation_proto_files":r["documentation_inputs"].as_array().map(Vec::len),"groups":r["groups"].as_object().map(serde_json::Map::len),"excluded":r["excluded"].as_array().map(Vec::len),"filtered":r["filtered"].as_array().map(Vec::len),"import_only":r["import_only"].as_array().map(Vec::len)},"full_build":r["full_build"]})
         }
         "licenses" => {
             json!({"licenses":r.as_object().map(|items|items.iter().map(|(name,text)|json!({"name":name,"characters":text.as_str().map(str::len)})).collect::<Vec<_>>())})
@@ -187,10 +170,9 @@ fn summary(report: &Report) -> Value {
         _ => r.clone(),
     }
 }
-pub fn envelope(report: &Report, storage: &anyhow::Result<PathBuf>) -> Value {
+pub fn envelope(report: &Report, storage: Option<&anyhow::Result<PathBuf>>) -> Value {
     let storage_failure = storage
-        .as_ref()
-        .err()
+        .and_then(|result| result.as_ref().err())
         .map(|e| anyhow::anyhow!("[E_REPORT] {e:#}"));
     let failure = report.failure.clone().or_else(|| {
         storage_failure
@@ -199,7 +181,7 @@ pub fn envelope(report: &Report, storage: &anyhow::Result<PathBuf>) -> Value {
     });
     let exit_code = if report.exit_code != 0 {
         report.exit_code
-    } else if storage.is_err() {
+    } else if storage.is_some_and(Result::is_err) {
         1
     } else {
         0
@@ -226,43 +208,146 @@ pub fn envelope(report: &Report, storage: &anyhow::Result<PathBuf>) -> Value {
     let error = failure.as_ref().map(|f| json!({"code":f.code,"kind":f.kind,"message":message.as_deref().map(bounded),"retryable":f.retryable,"suggested_action":f.suggested_action,
         "files":f.files.iter().take(INLINE_LIMIT).collect::<Vec<_>>(),"file_count":f.files.len(),"conflicts":f.conflicts.iter().take(INLINE_LIMIT).collect::<Vec<_>>(),"conflict_count":f.conflicts.len()}));
     let diagnostics = report.diagnostics.iter().take(INLINE_LIMIT).map(|d| json!({"file":d.file,"line":d.line,"column":d.column,"message":bounded(&d.message)})).collect::<Vec<_>>();
-    json!({"schema_version":SCHEMA_VERSION,"interface":"agent","tool":report.tool,"version":report.version,"run_id":report.run_id,"command":report.command,"status":status,"exit_code":exit_code,
-        "duration_seconds":report.duration_seconds,"project_root":report.context["project_root"],"proto_root":report.context["proto_root"],"server_root":report.context["server_root"],"calc_root":report.context["calc_root"],
-        "selection":report.context["selection"],"policy":report.context["policy"],"svn":if report.context["svn"].is_object() {json!({"updated":report.context["svn"]["updated"],"before_revision":report.context["svn"]["before"]["revision"],"after_revision":report.context["svn"]["after"]["revision"],"updated_path_count":report.context["svn"]["paths"].as_array().map(Vec::len)})}else{Value::Null},
-        "output_state":report.output_state,"generated_files_changed":report.generated_files_changed,"recovered_previous_transaction":report.recovered_previous_transaction,"result":summary(report),"error":error,"diagnostics":diagnostics,"diagnostic_count":report.diagnostics.len(),
-        "warning_count":report.events.iter().filter(|e|e.level=="warning").count(),"report_path":storage.as_ref().ok(),"report_error":storage_failure.as_ref().map(|e|bounded(&format!("{e:#}")))})
+    let value = Response {
+        api: "proto-builder.agent",
+        api_version: API_VERSION,
+        request_id: report.context["request"]["request_id"].as_str(),
+        operation: report.context["request"]["operation"].as_str(),
+        tool: ToolIdentity {
+            name: report.tool,
+            version: report.version,
+        },
+        run: RunIdentity {
+            id: &report.run_id,
+            duration_seconds: report.duration_seconds,
+        },
+        status,
+        exit_code,
+        context: &report.context,
+        result: summary(report),
+        output: OutputState {
+            state: report.output_state,
+            changed: report.generated_files_changed,
+            recovered_previous_transaction: report.recovered_previous_transaction,
+        },
+        error,
+        diagnostics: DiagnosticPage {
+            items: diagnostics,
+            total: report.diagnostics.len(),
+            truncated: report.diagnostics.len() > INLINE_LIMIT,
+        },
+        warnings: WarningCount {
+            count: report
+                .events
+                .iter()
+                .filter(|e| e.level == "warning")
+                .count(),
+        },
+        report: ReportStorage {
+            path: storage.and_then(|result| result.as_ref().ok()),
+            error: storage_failure.as_ref().map(|e| bounded(&format!("{e:#}"))),
+        },
+    };
+    serde_json::to_value(value).expect("response fields are serializable")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
-    fn aggregate_build_and_svn_context_do_not_hide_cancellation_or_timeout() {
-        let cancelled = anyhow::anyhow!("[E_SVN] info failed: [E_CANCELLED] cancelled");
-        let failure = Failure::from_error(&cancelled, &[]);
-        assert_eq!(failure.code, "E_CANCELLED");
-        assert_eq!(failure.kind, "cancelled");
-        let failure = Failure::from_error(
-            &anyhow::anyhow!("[E_BUILD] generation failed\n[E_TIMEOUT] protoc exceeded timeout"),
-            &[],
+    fn response_bounds_diagnostics_while_internal_report_preserves_evidence() {
+        let report = crate::report::Reporter::for_automation("plan", false, "en-US");
+        report.context(json!({"request":{"request_id":"check-42","operation":"plan"}}));
+        let messages = (0..25)
+            .map(|index| format!("file{index}.proto:12:4: {}", "界".repeat(1300)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let outcome = Err(anyhow::anyhow!("[E_BUILD] invalid source\n{messages}"));
+        let value = report.finish_in_memory(&outcome);
+        assert_eq!(value["api"], "proto-builder.agent");
+        assert_eq!(value["api_version"], 2);
+        assert_eq!(value["request_id"], "check-42");
+        assert_eq!(value["operation"], "plan");
+        assert_eq!(value["diagnostics"]["items"].as_array().unwrap().len(), 20);
+        assert_eq!(value["diagnostics"]["total"], 25);
+        assert_eq!(value["diagnostics"]["truncated"], true);
+        assert_eq!(
+            value["diagnostics"]["items"][0]["message"]
+                .as_str()
+                .unwrap()
+                .chars()
+                .count(),
+            1201
         );
-        assert_eq!(failure.code, "E_TIMEOUT");
-        assert_eq!(failure.kind, "process_timeout");
-        let failure = Failure::from_error(
-            &anyhow::anyhow!("[E_LOCKED] another build owns the target"),
-            &[],
+        assert_eq!(value["error"]["files"].as_array().unwrap().len(), 20);
+        assert_eq!(value["error"]["file_count"], 25);
+        assert!(value["report"]["path"].is_null());
+        assert!(value["report"]["error"].is_null());
+        for legacy in [
+            "schema_version",
+            "interface",
+            "project_root",
+            "output_state",
+            "generated_files_changed",
+            "report_path",
+            "report_error",
+        ] {
+            assert!(value.get(legacy).is_none(), "legacy field {legacy}");
+        }
+        let full = report.snapshot(0).unwrap();
+        assert_eq!(full["schema_version"], 1);
+        assert_eq!(full["diagnostics"].as_array().unwrap().len(), 25);
+        assert_eq!(
+            full["diagnostics"][0]["message"]
+                .as_str()
+                .unwrap()
+                .chars()
+                .count(),
+            1300
         );
-        assert!(failure.retryable);
-        assert_eq!(failure.suggested_action, "retry_after_current_build");
     }
+
+    #[test]
+    fn report_storage_failure_preserves_original_failure_and_committed_outputs() {
+        let report = crate::report::Reporter::for_automation("build", false, "en-US");
+        report.outputs("committed", Some(true));
+        let successful = report.finish_in_memory(&Ok(()));
+        assert_eq!(successful["status"], "success");
+        assert!(successful["report"]["error"].is_null());
+        let storage = Err(anyhow::anyhow!("permission denied"));
+        let failed = report.response(Some(&storage));
+        assert_eq!(failed["status"], "failed");
+        assert_eq!(failed["exit_code"], 1);
+        assert_eq!(failed["error"]["code"], "E_REPORT");
+        assert_eq!(failed["output"]["state"], "committed");
+        assert_eq!(failed["output"]["changed"], true);
+        assert!(failed["report"]["path"].is_null());
+        assert!(failed["report"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("permission denied"));
+
+        let blocked = crate::report::Reporter::for_automation("build", false, "en-US");
+        blocked.finish_in_memory(&Err(anyhow::anyhow!(
+            "[E_LOCKED] another build owns the output"
+        )));
+        let value = blocked.response(Some(&storage));
+        assert_eq!(value["status"], "blocked");
+        assert_eq!(value["exit_code"], 8);
+        assert_eq!(value["error"]["code"], "E_LOCKED");
+        assert_eq!(value["output"]["state"], "not_written");
+        assert!(value["report"]["error"].is_string());
+    }
+
     #[test]
     fn previous_transaction_recovery_never_claims_unchanged_outputs() {
-        let report = crate::report::Reporter::for_agent("build", false, "en-US");
+        let report = crate::report::Reporter::for_automation("build", false, "en-US");
         report.outputs("recovering", None);
         report.outputs("recovered", None);
         report.outputs("committed", Some(false));
-        let value = report.agent_output(&Ok("unused-report.json".into()));
-        assert_eq!(value["recovered_previous_transaction"], true);
-        assert!(value["generated_files_changed"].is_null());
+        let value = report.response(Some(&Ok("unused-report.json".into())));
+        assert_eq!(value["output"]["recovered_previous_transaction"], true);
+        assert!(value["output"]["changed"].is_null());
     }
 }

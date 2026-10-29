@@ -1,5 +1,4 @@
 use crate::{
-    cli::Options,
     config::{Loaded, Settings},
     process, protocol,
     report::Reporter,
@@ -9,6 +8,7 @@ use crate::{
 };
 use anyhow::{bail, Context, Result};
 use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -18,8 +18,16 @@ use std::{
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BuildPolicy {
+    pub force: bool,
+    pub adopt_existing: bool,
+}
+
 pub fn plan(loaded: &Loaded, report: &Reporter) -> Result<()> {
     crate::setup::notify(loaded, report)?;
+    output_roots(loaded)?;
     let p = scan::make(&loaded.root, &loaded.settings)?;
     report.info(
         "plan",
@@ -91,7 +99,7 @@ pub fn plan(loaded: &Loaded, report: &Reporter) -> Result<()> {
     report.result(serde_json::to_value(&p)?);
     Ok(())
 }
-pub fn run(loaded: &Loaded, options: &Options, report: &Reporter) -> Result<()> {
+pub fn run(loaded: &Loaded, policy: &BuildPolicy, report: &Reporter) -> Result<()> {
     let root = &loaded.root;
     let s = &loaded.settings;
     crate::setup::notify(loaded, report)?;
@@ -104,13 +112,7 @@ pub fn run(loaded: &Loaded, options: &Options, report: &Reporter) -> Result<()> 
             proto.display()
         );
     }
-    let roots = vec![
-        proto.clone(),
-        server.join("protocol"),
-        server.join("configs"),
-        calc.join("protocol"),
-    ];
-    validate_roots(&roots)?;
+    let roots = output_roots(loaded)?;
     let lock_paths = vec![
         root.clone(),
         server.join("protocol"),
@@ -392,8 +394,8 @@ pub fn run(loaded: &Loaded, options: &Options, report: &Reporter) -> Result<()> 
         &state,
         &outputs,
         &transaction::Policy {
-            force: options.force,
-            adopt_existing: options.adopt_existing,
+            force: policy.force,
+            adopt_existing: policy.adopt_existing,
             scopes: &scopes,
             full_go: p.full_build,
             full_calc: p.full_build && s.copy_to_calc,
@@ -464,15 +466,70 @@ fn calc_eligible(path: &Path) -> bool {
         .iter()
         .all(|n| n.starts_with("rpc") || n.starts_with("cmd"))
 }
-fn validate_roots(roots: &[PathBuf]) -> Result<()> {
-    for (i, root) in roots.iter().enumerate() {
+pub(crate) fn output_roots(loaded: &Loaded) -> Result<Vec<PathBuf>> {
+    let s = &loaded.settings;
+    let mut named = vec![
+        ("Proto 源文件目录 / proto_path", s.proto(&loaded.root)),
+        (
+            "业务服协议目录 / server_path",
+            s.server(&loaded.root).join("protocol"),
+        ),
+    ];
+    if s.protocol_config {
+        named.push((
+            "业务服配置目录 / server_path",
+            s.server(&loaded.root).join("configs"),
+        ));
+    }
+    if s.copy_to_calc {
+        named.push((
+            "计算服协议目录 / calc_path",
+            s.calc(&loaded.root).join("protocol"),
+        ));
+    }
+    for (i, (name, root)) in named.iter().enumerate() {
         util::no_symlinks(root)?;
-        for other in &roots[..i] {
-            if root.starts_with(other) || other.starts_with(root) {
+        reject_reparse_points(root)?;
+        for (other_name, other) in &named[..i] {
+            if within(root, other) || within(other, root) {
                 bail!(
-                    "[E_OUTPUT_SCOPE] overlapping output roots: {} and {}",
+                    "[E_OUTPUT_SCOPE] 目录重叠，请修改对应路径；不需要计算服时可关闭同步 / Overlapping directories; change the corresponding path or disable calculation sync when unused:\n{name}: {}\n{other_name}: {}",
                     root.display(),
                     other.display()
+                );
+            }
+        }
+    }
+    Ok(named.into_iter().map(|(_, path)| path).collect())
+}
+pub(crate) fn within(path: &Path, root: &Path) -> bool {
+    fn key(path: &Path) -> String {
+        let text = util::path_key(path);
+        if cfg!(windows) {
+            if let Some(rest) = text.strip_prefix("//?/unc/") {
+                return format!("//{rest}");
+            }
+            if let Some(rest) = text.strip_prefix("//?/") {
+                return rest.to_owned();
+            }
+        }
+        text
+    }
+    let path = key(path);
+    let root = key(root);
+    let root = root.trim_end_matches('/');
+    path == root || path.starts_with(&format!("{root}/"))
+}
+pub(crate) fn reject_reparse_points(path: &Path) -> Result<()> {
+    util::no_symlinks(path)?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        for parent in path.ancestors() {
+            if fs::symlink_metadata(parent).is_ok_and(|m| m.file_attributes() & 0x400 != 0) {
+                bail!(
+                    "[E_PATH] 不支持链接或连接目录 / Reparse points are not supported: {}",
+                    parent.display()
                 );
             }
         }
@@ -481,6 +538,7 @@ fn validate_roots(roots: &[PathBuf]) -> Result<()> {
 }
 pub fn doctor(loaded: &Loaded, report: &Reporter) -> Result<()> {
     let s = &loaded.settings;
+    let roots = output_roots(loaded)?;
     let tools = toolchain::resolve(&loaded.root, s, report)?;
     let p = scan::make(&loaded.root, s)?;
     let mut checks = vec![];
@@ -496,8 +554,12 @@ pub fn doctor(loaded: &Loaded, report: &Reporter) -> Result<()> {
             bail!("[E_SVN_CONFLICT] {}", conflicts.join("\n"));
         }
     }
-    for path in [s.server(&loaded.root), s.calc(&loaded.root)] {
-        util::no_symlinks(&path)?;
+    checks.push(json!({"check":"output-layout","passed":true,"roots":roots}));
+    for path in roots
+        .iter()
+        .skip(if s.docs || s.protocol_config { 0 } else { 1 })
+    {
+        util::no_symlinks(path)?;
         let parent = path
             .ancestors()
             .find(|p| p.is_dir())

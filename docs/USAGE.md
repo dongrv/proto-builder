@@ -1,5 +1,7 @@
 # 使用与配置详解
 
+本文随源码更新。新交互功能及 Agent API v2 随 [v1.3.0-dev.1 预发布版](https://github.com/dongrv/proto-builder/releases/tag/v1.3.0-dev.1) 提供；稳定版仍为 v1.2.0。
+
 当前 SVN 项目的 protobuf → Go 开发工具。日常只需一个 Windows x86_64 的 `proto-builder.exe`，以及可选的 TOML 配置。无 BAT、Python、Go、Rust 运行环境依赖。固定版本的 protoc 和 Go、gRPC、文档插件已压缩内置，首次使用自动解压到用户缓存，每次运行验证 SHA256。
 
 **默认在构建开始时执行一次项目范围的 SVN 更新。** 该功能使用已安装的 `svn.exe`；可通过配置或 `--no-svn-update` 关闭。不会更新整个工作副本的上级目录，不会自动提交、切分支或解决冲突。
@@ -16,6 +18,8 @@
 
 默认安装到 `%LOCALAPPDATA%\ProtoBuilder\bin` 并注册用户 PATH；新开终端即可使用。也可直接运行下载的程序，或用 `install --dir D:\DevTools\ProtoBuilder` 自选安装目录。`install --system` 使用 Program Files 和系统 PATH，需要管理员终端。
 
+安装本页的新交互功能和 Agent API v2 时，改为执行 `proto-builder-1.3.0-dev.1-windows-x86_64.exe install`。这是预发布版；升级前请按 [版本说明](RELEASE-1.3.0-dev.1.md) 迁移原 `--agent` 调用。
+
 在项目根目录执行：
 
 ```powershell
@@ -24,7 +28,7 @@ proto-builder plan
 proto-builder build
 ```
 
-需要鼠标操作时运行 `proto-builder web`，自动在默认浏览器打开本地工作台。无参数执行 `proto-builder` 打开键盘向导，支持方向键、空格多选、搜索、粘贴和简单输入；终端不捕获鼠标，鼠标移动、点击、滚轮和焦点事件不触发界面重绘。
+需要鼠标操作时运行 `proto-builder web`，自动在默认浏览器打开本地工作台。无参数执行 `proto-builder` 打开键盘向导，支持方向键、空格多选、搜索和粘贴。路径输入支持左右、Home、End、Delete 和水平滚动；Ctrl+C 退出，Esc 返回。多选页使用 Insert 添加 ID 或排除 glob。终端不捕获鼠标，鼠标移动、点击、滚轮和焦点事件不触发界面重绘。
 
 从其他目录启动时可以指定根目录：
 
@@ -45,15 +49,16 @@ proto-builder web --no-open
 
 页面以 Claude Code 官网的炭黑、米白衬线标题和克制的橙色为视觉参考，支持暖白配色及中英文切换。HTML、CSS、JavaScript 全部内置 EXE，无需 Node.js、额外服务、联网资源或前端安装步骤。需要支持现代 JavaScript 的浏览器，推荐 Windows 上的 Edge 或 Chrome。
 
-- 用目录选择器浏览磁盘和文件夹，或直接输入相对、绝对路径；更换「协议项目根目录」后点击「打开项目」。这里是协议仓库的根目录（例如 `D:\work\go\src\shengyou\docs\branches\beta`），通常包含 `proto/`；「Proto 源文件目录」则指实际的 `proto/` 子目录。业务服与计算服目录是两个 Go 工程的路径，分别配置。
-- 活动 ID、机器 ID 从真实协议自动读取，支持搜索、多选，输入数字后按 Enter 可添加；排除项支持目录和 glob。空选、交集、公共依赖等规则与 CLI 相同。
-- 「预览计划」列出实际扫描、筛选和编译范围；「检查环境」验证开发环境；「开始编译」执行 SVN 更新、生成和安全写回。
-- 构建时查看增量日志和阶段、停止当前操作，结束后按新增、修改、删除、未变查看文件，搜索结果或下载完整 JSON 报告。错误保留原文件、行、列，点击文件位置可复制。
+- 用目录选择器浏览磁盘和文件夹，或直接输入相对、绝对路径；更换「协议项目根目录」后点击「加载项目」。这里是协议仓库的根目录（例如 `D:\work\go\src\shengyou\docs\branches\beta`），通常包含 `proto/`；「Proto 源文件目录」则指实际的 `proto/` 子目录。业务服与计算服目录是两个 Go 工程的路径，分别配置。重新加载同项目保留当前选择与结果；切换项目存在未保存参数时先确认处理方式。
+- 活动 ID、机器 ID 从真实协议自动读取，支持搜索、多选，输入数字后按 Enter 或添加按钮加入选集；排除项支持目录和 glob。搜索文字本身不是已选条件，未加入的输入会阻止直接执行并提供处理提示。已选条件以标签常驻显示，操作区展示本次范围。空选、交集、公共依赖等规则与 CLI 相同。
+- 「预览计划」列出实际扫描、筛选和编译范围；修改参数后，上次结果会标记为过期，可重新预览。「检查环境」、预览和构建共用输出目录检查，仅校验实际启用的输出目标；「开始编译」执行 SVN 更新、生成和安全写回。
+- 构建时查看增量日志和阶段、停止当前操作，结束后按新增、修改、删除、未变查看文件，搜索结果或下载完整 JSON 报告。错误分别说明原因、生成物写回状态和下一步操作；保留原文件、行、列及完整技术详情，点击文件位置可复制。
+- 成功后可直接查看共享协议文档、打开输出目录或浏览本次备份。备份按原文件名展示，可下载原字节；下载前检查备份是否已被修改。备份导出用于人工比对或取回原文件，不自动覆盖现有项目。这里的产物备份与 `self-update rollback` 的程序版本回退不同。
 - 路径与开发者名字在首次编译成功后保存到本机；筛选和其他开关默认只在当前会话生效。「保存配置」先展示差异，确认后写入项目 TOML 并备份；配置被其他程序修改时拒绝覆盖，需重新预览。
 
 同一网页服务一次只执行一项任务，执行期间锁定参数；停止后可以直接调整重试。刷新页面可恢复当前或最近一次任务。关闭浏览器标签页不会停止构建；点击页面底部「关闭工作台」或在启动终端按 Ctrl+C 才会停止服务及当前任务。
 
-服务只监听 `127.0.0.1`，默认随机空闲端口。启动时生成临时会话凭据，通过终端显示的完整地址进入；API 校验凭据、Host 和 Origin。固定端口不改变这个限制，不提供远程访问或任意静态文件下载。`web` 不与 `--json`、`--interactive`、`--dry-run` 混用；只读操作在页面点击「预览计划」，机器输出使用原 CLI。
+服务只监听 `127.0.0.1`，默认随机空闲端口。启动时生成临时会话凭据，通过终端显示的完整地址进入；API 校验凭据、Host 和 Origin。固定端口不改变这个限制，不提供远程访问或任意静态文件下载。`web` 不与 `--json`、`--interactive`、`--dry-run` 混用；只读操作在页面点击「预览计划」，Agent 使用专用 JSON 请求或 MCP 接口，见下文。
 
 ## 常用命令
 
@@ -71,7 +76,7 @@ proto-builder build --dry-run
 
 # 独立控制功能
 proto-builder build --no-svn-update --no-docs --no-copy
-proto-builder build --no-config
+proto-builder build --no-protocol-config
 
 # pb.go 默认备份后以本次生成结果覆盖，无需额外参数
 # 首次接管其他已有且内容不同的生成物（HTML / Markdown / JSON 等）
@@ -88,11 +93,27 @@ proto-builder version
 proto-builder --help
 ```
 
-`--assignID`、`--server_path`、`--calc_path`、`--proto_path` 仍是命令参数别名；旧脚本入口已弃用。没有 `--direct` 等绕过安全写回的模式。
+`--assignID`、`--server_path`、`--calc_path`、`--proto_path` 仍是命令参数别名；`--no-config` 仍兼容，含义与 `--no-protocol-config` 相同，均关闭协议号配置生成，不是不读取 TOML。旧脚本入口已弃用。没有 `--direct` 等绕过安全写回的模式。
 
 活动 ID 从 `act<数字>`、`activity<数字>` 的路径或 package 识别；机器 ID 从 `slot<数字>`、`machine<数字>`、`rpc<数字>` 识别。也支持独立注释 `// activity_id=7034`、`// machine_id=6034`。显式元数据与目录识别冲突会给出文件和行号。筛选使用完整 ID 匹配。指定 ID 却没有对应协议时会失败，不会只生成公共协议并宣称成功。
 
 排除项支持目录名、相对于 proto 的路径、glob，优先于 ID 筛选。被排除或未选中的文件仍可作为 import 依赖被读取，但不为其生成 Go 文件。缺失或循环 import 会中止执行。
+
+## Codex / Agent 调用
+
+`1.3.0-dev.1` 预发布版的机器接口使用 Agent API v2：
+
+```powershell
+proto-builder agent capabilities
+proto-builder agent run --request D:\Temp\proto-request.json
+proto-builder mcp
+```
+
+JSON 请求为 `{"api_version":2,"operation":"plan","params":{"options":{"repo_root":"D:/verified/protocol-project"}}}`，把路径换成实际目标。构建改用 operation build，且必须明确提供绝对 repo_root。params 必须是对象；省略选项表示继承，空数组表示清空，false 明确关闭。构建的 force / adopt_existing 策略独立放在 params.policy，verbose 放在 params。
+
+Agent 入口不混用全局 CLI 参数，包括 --json、--non-interactive；旧 --agent 和 v1 Agent 请求已删除。普通命令的 --json 仍返回完整内部报告，Agent API 返回有界摘要和完整报告路径，两者格式独立。MCP 工具 arguments 直接采用 params 对象，不传 api_version、operation、request_id 或额外 params 包装。
+
+配置来源、状态与备份规则见 [Agent 接口](AGENT-INTERFACE.md)，完整示例和分页见 [JSON 请求](AGENT-REQUESTS.md)，客户端配置见 [MCP](MCP.md)。
 
 ## 配置
 

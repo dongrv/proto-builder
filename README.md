@@ -16,6 +16,8 @@
 
 默认安装到 `%LOCALAPPDATA%\ProtoBuilder\bin` 并添加用户 PATH。**新开终端**后即可使用，也可直接运行下载的 EXE。
 
+需要 Agent API v2、MCP 和新交互功能时，下载 [v1.3.0-dev.1 预发布版](https://github.com/dongrv/proto-builder/releases/tag/v1.3.0-dev.1)，运行 `proto-builder-1.3.0-dev.1-windows-x86_64.exe install`。稳定更新渠道仍使用 v1.2.0；升级差异见 [预发布说明](docs/RELEASE-1.3.0-dev.1.md)。
+
 ## 开始使用
 
 在项目根目录执行，推荐从网页工作台开始：
@@ -52,8 +54,10 @@ proto-builder self-update apply # 下载、验签并更新
 
 ## 详细文档
 
-Codex / Agent 调用：使用 `proto-builder plan --agent`、`proto-builder build --agent` 获取稳定 JSON 摘要，`proto-builder config show --explain --agent` 查看配置来源。[Agent 接口与 Skill 用法](docs/AGENT-INTERFACE.md) · [v1.2.0 更新说明](docs/RELEASE-1.2.0.md)。
+Codex / Agent 调用：`1.3.0-dev.1` 预发布版提供 **Agent API v2**。先运行 `proto-builder agent capabilities`，再通过 `proto-builder agent run --request request.json` 或 `proto-builder mcp` 调用。旧 `--agent` 已删除，普通 CLI 与网页用法不变。[Agent 接口与 Skill 用法](docs/AGENT-INTERFACE.md) · [预发布说明](docs/RELEASE-1.3.0-dev.1.md)。
 
 - [使用与配置详解](docs/USAGE.md)：网页操作、筛选规则、配置优先级、生成物保护、更新与卸载。
+- [Agent JSON 请求](docs/AGENT-REQUESTS.md) · [Codex / MCP 接入](docs/MCP.md)：8 种操作，包含能力发现、协议查询及报告分页。
+- [交互体验优化](docs/UX-IMPROVEMENTS.md)：选择范围、预览反馈、结果入口与键盘操作。
 - [SVN 日常操作](docs/SVN-WORKFLOW.md) · [旧工具弃用说明](docs/LEGACY-DEPRECATED.md)
 - [构建、签名与发布](docs/RELEASING.md) · [验收记录](docs/VALIDATION.md) · [第三方许可](docs/THIRD-PARTY-NOTICES.md)

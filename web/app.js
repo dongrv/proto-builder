@@ -3,6 +3,24 @@
 (() => {
   const $ = (id) => document.getElementById(id);
   const translations = {
+    加载项目: "Load project",
+    核对项目路径: "Review project paths",
+    已确认项目路径: "Confirmed project paths",
+    "添加输入的 ID": "Add entered IDs",
+    清空搜索: "Clear search",
+    "已选 ID": "Selected IDs",
+    已选排除目录: "Selected exclusions",
+    技术详情: "Technical details",
+    当前设置尚未保存: "Current settings are not saved",
+    "加载其他项目会放弃本页尚未保存的设置。可返回保存，或放弃后继续加载。":
+      "Loading another project discards unsaved settings on this page. Return to save them, or discard and continue.",
+    保留当前设置: "Keep current settings",
+    放弃并加载: "Discard and load",
+    本次生成物备份: "Backups from this build",
+    "按原文件名导出备份；下载不会覆盖项目文件。":
+      "Export backups with their original filenames. Downloads do not replace project files.",
+    "环境变量信息需要核对；下方已有路径仍可使用。请确认实际目录，编译成功后会记住路径和名字。":
+      "Review the environment information. Existing paths below can still be used. Confirm the directories; paths and name are remembered after a successful build.",
     跳到工作台: "Skip to workspace",
     工作台: "Workspace",
     使用说明: "Documentation",
@@ -225,7 +243,14 @@
     folderTarget: null,
     save: null,
     catalogVersion: 0,
+    savedFingerprint: null,
+    runForm: null,
+    starting: false,
+    pendingProject: null,
+    summaryFingerprint: null,
+    disposed: false,
   };
+  const lifetime = new AbortController();
   let token = new URLSearchParams(location.hash.slice(1)).get("token");
   try {
     if (token) sessionStorage.setItem("proto-session", token);
@@ -247,9 +272,15 @@
     $("notice").textContent = message;
     $("notice").hidden = !message;
     $("notice").classList.toggle("error", error);
+    $("action-notice").textContent = message;
+    $("action-notice").hidden = !message;
+    $("action-notice").classList.toggle("error", error);
   }
   async function api(path, payload, download = false) {
     const controller = new AbortController();
+    const stop = () => controller.abort();
+    lifetime.signal.addEventListener("abort", stop, { once: true });
+    if (lifetime.signal.aborted) controller.abort();
     const timer = setTimeout(() => controller.abort(), 20000);
     try {
       const response = await fetch(path, {
@@ -271,13 +302,21 @@
         throw new Error(data.error || `HTTP ${response.status}`);
       return data;
     } catch (error) {
-      if (error instanceof TypeError || error.name === "AbortError")
-        throw new Error(
+      if (
+        error instanceof TypeError ||
+        error instanceof SyntaxError ||
+        error.name === "AbortError"
+      ) {
+        const connectionError = new Error(
           t("服务连接失败，请检查终端，并用终端中的完整地址重新打开网页。"),
         );
+        connectionError.uncertainResponse = true;
+        throw connectionError;
+      }
       throw error;
     } finally {
       clearTimeout(timer);
+      lifetime.signal.removeEventListener("abort", stop);
     }
   }
   const attempt = (operation) => async (event) => {
@@ -314,10 +353,14 @@
     if (state.events.length) renderLogs();
     if (state.folder) renderFolders();
     renderSetup();
+    renderCurrent();
   }
   function renderSetup() {
     const setup = state.loaded?.setup;
     $("setup-notice").hidden = !setup?.needs_confirmation;
+    $("project-paths-summary").textContent = t(
+      setup?.needs_confirmation ? "核对项目路径" : "已确认项目路径",
+    );
     $("setup-issues").replaceChildren(
       ...(setup?.issues || []).map((issue) => node("li", issue)),
     );
@@ -364,11 +407,15 @@
     $("project-name").textContent =
       data.root.split(/[\\/]/).filter(Boolean).pop() || data.root;
     $("project-name").title = data.root;
+    state.savedFingerprint = fingerprint(form(false));
+    $("project-paths").open = Boolean(data.setup?.needs_confirmation);
+    for (const kind of ["activity", "machine", "exclude"])
+      $(`${kind}-search`).value = "";
     setBusy(false);
     translate();
   }
-  function form() {
-    if (!$("settings-form").reportValidity())
+  function form(validate = true) {
+    if (validate && !$("settings-form").reportValidity())
       throw new Error(
         localized("请检查构建参数。", "Check the build parameters."),
       );
@@ -391,7 +438,7 @@
       ["timeout", "timeout_seconds"],
     ]) {
       const value = Number($(id).value);
-      if (!Number.isSafeInteger(value) || value < 0)
+      if (validate && (!Number.isSafeInteger(value) || value < 0))
         throw new Error(
           localized(
             "请输入有效的整数参数。",
@@ -409,13 +456,474 @@
       adopt_existing: $("adopt-existing").checked,
     };
   }
+  function samePath(a, b) {
+    const normalize = (value) =>
+      String(value || "")
+        .replaceAll("\\", "/")
+        .replace(/\/+$/, "")
+        .toLowerCase();
+    return normalize(a) === normalize(b);
+  }
+  function fingerprint(value) {
+    const sort = (item, key = "") => {
+      if (Array.isArray(item))
+        return [...item]
+          .map((v) => sort(v))
+          .sort((a, b) => String(a).localeCompare(String(b)));
+      if (item && typeof item === "object")
+        return Object.fromEntries(
+          Object.keys(item)
+            .sort()
+            .map((k) => [k, sort(item[k], k)]),
+        );
+      if (typeof item === "string" && (key === "root" || key.endsWith("_path")))
+        return item
+          .trim()
+          .replaceAll("\\", "/")
+          .replace(/\/+$/, "")
+          .toLowerCase();
+      return item;
+    };
+    return JSON.stringify(sort(value));
+  }
+  function pendingInputs() {
+    return ["activity", "machine", "exclude"].filter((kind) => {
+      const value = $(`${kind}-search`).value.trim();
+      if (!value) return false;
+      const values = kind === "exclude" ? [value] : value.split(/[,，\s]+/);
+      return values.some((id) => !state[kind].has(id));
+    });
+  }
+  function renderCurrent() {
+    if (!state.loaded) return;
+    const current = form(false),
+      pending = pendingInputs();
+    for (const kind of ["activity", "machine", "exclude"]) {
+      const tags = $(`${kind}-selected`);
+      tags.replaceChildren(
+        ...[...state[kind]]
+          .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+          .map((value) => {
+            const button = node("button", `${value} ×`, "selection-tag");
+            button.type = "button";
+            button.disabled = state.busy || state.stopped;
+            button.setAttribute(
+              "aria-label",
+              localized(`移除 ${value}`, `Remove ${value}`),
+            );
+            button.addEventListener("click", () => {
+              state[kind].delete(value);
+              renderPickers();
+            });
+            return button;
+          }),
+      );
+      if (kind !== "exclude")
+        $(`add-${kind}`).disabled = !$(`${kind}-search`).value.trim();
+      $(`clear-${kind}-search`).disabled = !$(`${kind}-search`).value.trim();
+      const message = $(`${kind}-pending`);
+      message.hidden = !pending.includes(kind);
+      message.textContent = localized(
+        kind === "exclude"
+          ? "搜索内容尚未加入排除范围；请添加、勾选或清空。"
+          : "输入尚未加入选择；请添加、勾选或清空。",
+        "Search text is not selected. Add, select, or clear it.",
+      );
+    }
+    const ids = (set) => [...set].join(", ");
+    const scope =
+      state.activity.size || state.machine.size
+        ? [
+            state.activity.size
+              ? localized(
+                  `活动 ${ids(state.activity)}`,
+                  `Activities ${ids(state.activity)}`,
+                )
+              : "",
+            state.machine.size
+              ? localized(
+                  `机器 ${ids(state.machine)}`,
+                  `Machines ${ids(state.machine)}`,
+                )
+              : "",
+          ]
+            .filter(Boolean)
+            .join(localized(" ∩ ", " ∩ "))
+        : localized("全部协议", "All protocols");
+    const summary = $("execution-summary");
+    const scopeFingerprint = `${language}:${fingerprint(current)}`;
+    const notes = [];
+    if (Number(current.settings.assign_id))
+      notes.push(
+        localized(
+          `旧 ID ${current.settings.assign_id}`,
+          `Legacy ID ${current.settings.assign_id}`,
+        ),
+      );
+    if (state.exclude.size)
+      notes.push(
+        localized(
+          `排除 ${ids(state.exclude)}`,
+          `Exclude ${ids(state.exclude)}`,
+        ),
+      );
+    notes.push(localized("公共协议保留", "Common protocols retained"));
+    notes.push(
+      current.settings.docs
+        ? localized(
+            "文档覆盖完整非 RPC 协议（遵循排除项）",
+            "Documents cover all non-RPC protocols, with exclusions",
+          )
+        : localized("不生成文档", "No documentation"),
+    );
+
+    const destinations = `${localized("业务服", "Server")}: ${current.settings.server_path}${current.settings.copy_to_calc ? ` · ${localized("计算服", "Calculation server")}: ${current.settings.calc_path}` : ""}`;
+    if (state.summaryFingerprint !== scopeFingerprint) {
+      summary.replaceChildren(
+        node(
+          "strong",
+          localized(`本次范围：${scope}`, `Current scope: ${scope}`),
+        ),
+        node("span", notes.join(" · ")),
+        node("span", destinations, "summary-path"),
+        node(
+          "span",
+          localized(
+            "Go 文件有差异时先备份，再以本次结果覆盖。",
+            "Differing Go files are backed up and replaced by this build.",
+          ),
+        ),
+      );
+      state.summaryFingerprint = scopeFingerprint;
+    }
+    const dirty =
+      state.runForm && fingerprint(current) !== fingerprint(state.runForm);
+    const snapshot = $("snapshot-notice");
+    snapshot.hidden = !dirty;
+    snapshot.textContent = localized(
+      "参数已变更；下方结果和等价命令属于上次操作。可重新预览当前范围。",
+      "Parameters changed. Results and the equivalent command below belong to the previous operation. Preview the current scope again.",
+    );
+    $("completion-box").classList.toggle("stale", Boolean(dirty));
+    const rootChanged = !samePath(current.root, state.loaded.root);
+    $("root").setAttribute("aria-invalid", String(rootChanged));
+    $("root-changed-note").hidden = !rootChanged;
+    $("root-changed-note").textContent = localized(
+      "目录已修改，请先点击「加载项目」。",
+      "The directory changed. Click Load project first.",
+    );
+    if (rootChanged) $("project-paths").open = true;
+    $("path-overview").replaceChildren(
+      ...[
+        [localized("协议项目", "Protocol project"), state.loaded.root],
+        [localized("业务服", "Server"), current.settings.server_path],
+        ...(current.settings.copy_to_calc
+          ? [
+              [
+                localized("计算服", "Calculation server"),
+                current.settings.calc_path,
+              ],
+            ]
+          : []),
+      ].map(([label, path]) => {
+        const line = node("span", `${label}: ${path}`);
+        line.title = path;
+        return line;
+      }),
+    );
+  }
+  function focusField(id) {
+    const field = $(id);
+    if (!field) return;
+    for (
+      let parent = field.parentElement;
+      parent;
+      parent = parent.parentElement
+    )
+      if (parent.tagName === "DETAILS") parent.open = true;
+    field.focus();
+    field.scrollIntoView({ block: "nearest" });
+  }
+  function actionButton(label, action) {
+    const button = node("button", label, "button secondary small");
+    button.type = "button";
+    button.addEventListener("click", attempt(action));
+    return button;
+  }
+  function renderFailure(report) {
+    const failure = report.failure || {};
+    const kinds = {
+      invalid_paths: [
+        "输出目录配置有冲突。",
+        "Output paths conflict.",
+        "请修改业务服或计算服目录；不需要同步时可关闭计算服同步。",
+        "Correct the server paths, or disable calculation sync if it is not needed.",
+        "server-path",
+      ],
+      no_matching_protocols: [
+        "当前筛选没有匹配的协议。",
+        "No protocols match the current filters.",
+        "核对活动、机器 ID 的交集及排除项，然后重新预览。",
+        "Review the intersection of activity/machine IDs and exclusions, then preview again.",
+        "activity-search",
+      ],
+      invalid_protocols: [
+        "协议文件需要修正。",
+        "Protocol sources need correction.",
+        "按下方文件及行号修正源文件，再重新编译。",
+        "Correct the source files at the locations below, then build again.",
+      ],
+      svn_conflict: [
+        "SVN 工作副本存在冲突。",
+        "The SVN working copy has conflicts.",
+        "先在 SVN 中处理冲突，再重新执行。",
+        "Resolve the SVN conflicts before running again.",
+      ],
+      svn_failed: [
+        "SVN 操作未完成。",
+        "The SVN operation did not complete.",
+        "检查 SVN 连接、权限和工作副本状态，再重试。",
+        "Check SVN connectivity, permissions and working-copy status before retrying.",
+      ],
+      unowned_output: [
+        "其他已有生成物尚未接管。",
+        "Other existing outputs have not been adopted.",
+        "核对冲突文件；确认允许替换时，选择接管已有生成物后重试。",
+        "Review conflicting files. Select adoption only if replacing those files is intended.",
+        "adopt-existing",
+      ],
+      modified_output: [
+        "其他生成物包含手动修改。",
+        "Other outputs contain manual edits.",
+        "先核对需要保留的修改；确认后再选择覆盖手动修改的生成物。",
+        "Review edits that must be retained before explicitly choosing to replace modified outputs.",
+        "force",
+      ],
+      modified_stale_output: [
+        "过期产物包含手动修改。",
+        "Stale outputs contain manual edits.",
+        "先核对文件；允许清理时再选择覆盖手动修改的生成物。",
+        "Review the files before explicitly allowing removal of modified stale outputs.",
+        "force",
+      ],
+      output_conflict: [
+        "生成文件存在冲突。",
+        "Generated outputs have conflicts.",
+        "逐项核对冲突文件，不要直接强制重试。",
+        "Review each conflicting file before choosing a replacement policy.",
+      ],
+      process_timeout: [
+        "编译任务超过设定时间。",
+        "The compiler exceeded its time limit.",
+        "检查日志和协议规模，必要时调整超时后重试。",
+        "Review logs and protocol size; adjust the timeout if needed.",
+        "timeout",
+      ],
+      target_busy: [
+        "目标正在被其他任务使用。",
+        "Another task is using the target.",
+        "等待现有任务结束后再重试。",
+        "Wait for the current task to finish before retrying.",
+      ],
+      inputs_changed: [
+        "执行期间输入或配置发生变化。",
+        "Inputs or configuration changed during execution.",
+        "重新核对配置和协议，预览后再执行。",
+        "Review the changed configuration and protocols, then preview and run again.",
+      ],
+      report_storage: [
+        "报告保存失败。",
+        "The report could not be saved.",
+        "先核对下方写回状态，再检查报告目录权限与剩余空间。",
+        "Check the output state below before inspecting report-directory permissions and free space.",
+      ],
+      output_transaction: [
+        "写回或恢复过程遇到问题。",
+        "Output commit or recovery encountered a problem.",
+        "保留日志与备份，核对文件状态后再处理。",
+        "Keep the logs and backups, and inspect file state before proceeding.",
+      ],
+      cancelled: [
+        "操作已取消。",
+        "Operation cancelled.",
+        "核对写回状态，按需修改参数后重新执行。",
+        "Check output state and run again when appropriate.",
+      ],
+      invalid_configuration: [
+        "配置需要核对。",
+        "Configuration needs review.",
+        "检查配置文件和下方详情，修正后再执行。",
+        "Review the configuration and details, correct them, then run again.",
+        "root",
+      ],
+    };
+    const data = kinds[failure.kind] || [
+      "本次操作未完成。",
+      "The operation did not complete.",
+      "查看文件位置和技术详情，修正原因后再执行。",
+      "Review file locations and technical details, correct the cause, then run again.",
+    ];
+    $("error-summary").textContent = localized(data[0], data[1]);
+    $("error-next-step").textContent = localized(
+      `下一步：${data[2]}`,
+      `Next: ${data[3]}`,
+    );
+    const states = {
+      not_written: ["生成物未写回。", "Generated outputs were not written."],
+      committed: [
+        "生成物已写回；请勿因报告错误而重复覆盖。",
+        "Generated outputs were committed. A report error does not require repeating the build.",
+      ],
+      rolled_back: [
+        "本次写回已回滚。",
+        "This output transaction was rolled back.",
+      ],
+      recovered: [
+        "已恢复上次未完成的事务；本次写回状态请结合结果核对。",
+        "A previous incomplete transaction was recovered. Check this operation's results before proceeding.",
+      ],
+      recovery_required: [
+        "文件状态需检查；请保留备份并处理恢复问题。",
+        "File state needs inspection. Preserve backups and resolve recovery issues.",
+      ],
+    };
+    const output = states[report.output_state] || [
+      "写回状态未确认，请核对日志与文件。",
+      "Output state is not confirmed. Check logs and files.",
+    ];
+    $("error-output-state").textContent = localized(...output);
+    const actions = $("error-actions");
+    actions.replaceChildren();
+    if (data[4])
+      actions.append(
+        actionButton(localized("修改相关设置", "Review related settings"), () =>
+          focusField(data[4]),
+        ),
+      );
+    if (failure.files?.length)
+      actions.append(
+        actionButton(localized("复制相关文件清单", "Copy affected files"), () =>
+          copy(
+            failure.files.join("\n"),
+            localized("文件清单已复制", "File list copied"),
+          ),
+        ),
+      );
+    if (failure.suggested_action && !kinds[failure.kind])
+      $("error-next-step").textContent += ` (${failure.suggested_action})`;
+  }
+  function renderResultActions(report) {
+    const box = $("result-actions");
+    box.replaceChildren();
+    const locations = report.locations || {};
+    if (!report.finished) {
+      box.hidden = true;
+      return;
+    }
+    for (const [kind, zh, en] of [
+      ["docs", "查看协议文档", "View protocol docs"],
+      ["server", "打开业务服产物", "Open server outputs"],
+      ["calc", "打开计算服产物", "Open calculation outputs"],
+    ]) {
+      if (locations[kind])
+        box.append(
+          actionButton(localized(zh, en), async () => {
+            await api("/api/open", { job_id: state.job, kind });
+          }),
+        );
+    }
+    if (locations.backup || report.result?.changes?.backup) {
+      box.append(
+        actionButton(localized("浏览本次备份", "Browse backups"), showBackups),
+      );
+      box.append(
+        actionButton(localized("复制备份路径", "Copy backup path"), () =>
+          copy(
+            locations.backup || report.result.changes.backup,
+            localized("备份路径已复制", "Backup path copied"),
+          ),
+        ),
+      );
+    }
+    if (report.artifacts_error)
+      box.append(
+        node(
+          "p",
+          localized(
+            `结果已保留，但备份入口暂不可用：${report.artifacts_error}`,
+            `Results are retained, but backup access is unavailable: ${report.artifacts_error}`,
+          ),
+          "pending-note",
+        ),
+      );
+    box.hidden = !box.childElementCount;
+  }
+  async function showBackups() {
+    const job = state.job;
+    $("backup-dialog").showModal();
+    $("backup-path").textContent = "";
+    $("backup-files").replaceChildren(
+      node("p", localized("正在读取备份…", "Loading backups…")),
+    );
+    try {
+      const result = await api(`/api/backups/${encodeURIComponent(job)}`);
+      $("backup-path").textContent = result.directory || "";
+      $("backup-files").replaceChildren(
+        ...result.files.map((file) => {
+          const row = node("div", undefined, "backup-row");
+          const name = node("div");
+          name.append(
+            node("strong", file.name),
+            node("p", file.target, "mono"),
+          );
+          const button = actionButton(
+            localized("导出原文件", "Export original"),
+            async () => {
+              try {
+                saveBlob(
+                  await api(file.download_url, undefined, true),
+                  file.name,
+                );
+              } catch (error) {
+                row.append(node("p", error.message, "pending-note"));
+              }
+            },
+          );
+          row.append(name, button);
+          return row;
+        }),
+      );
+      if (!result.files.length)
+        $("backup-files").append(
+          node(
+            "p",
+            localized(
+              "本次没有需要备份的原文件。",
+              "No original files needed backup in this build.",
+            ),
+          ),
+        );
+    } catch (error) {
+      $("backup-files").replaceChildren(
+        node("p", error.message, "pending-note"),
+      );
+    }
+  }
+  function saveBlob(blob, filename) {
+    const url = URL.createObjectURL(blob),
+      link = node("a");
+    link.href = url;
+    link.download = filename;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
   function setBusy(busy) {
     state.busy = busy;
     $("settings-fields").disabled = busy || state.stopped || !state.loaded;
     for (const id of ["plan", "build", "doctor"])
       $(id).disabled = busy || state.stopped || !state.loaded;
     $("run-progress").hidden = !busy;
-    $("cancel").disabled = !busy || state.cancelling;
+    $("cancel").disabled = !busy || state.starting || state.cancelling;
     $("cancel").textContent = t(state.cancelling ? "正在停止" : "停止操作");
   }
   async function loadCatalog() {
@@ -460,6 +968,7 @@
       input.addEventListener("change", () => {
         input.checked ? selection.add(value) : selection.delete(value);
         updateCounts();
+        renderCurrent();
       });
       label.append(input, node("span", value));
       list.append(label);
@@ -483,6 +992,7 @@
         ? localized(`已选 ${state[kind].size}`, `${state[kind].size} selected`)
         : t("全部");
     $("exclude-count").textContent = number(state.exclude.size);
+    renderCurrent();
   }
   function renderPickers() {
     renderPicker("activity", state.catalog.activities);
@@ -502,6 +1012,7 @@
       input.addEventListener("change", () => {
         input.checked ? state.exclude.add(value) : state.exclude.delete(value);
         updateCounts();
+        renderCurrent();
       });
       label.append(input, node("span", value));
       list.append(label);
@@ -530,9 +1041,32 @@
       renderPickers();
     }
   }
-  async function openProject() {
+  async function openProject(confirmed = false) {
+    const target = $("root").value.trim();
+    if (samePath(target, state.loaded.root)) {
+      await loadCatalog();
+      notice(
+        localized(
+          "已刷新协议列表，当前选择与结果已保留。",
+          "Protocol list refreshed. Current selections and results were retained.",
+        ),
+      );
+      return;
+    }
+    const current = form(false);
+    current.root = state.loaded.root;
+    if (
+      !confirmed &&
+      (fingerprint(current) !== state.savedFingerprint ||
+        pendingInputs().length)
+    ) {
+      state.pendingProject = target;
+      $("project-dialog").showModal();
+      return;
+    }
     const data = await api("/api/project", { root: $("root").value.trim() });
     state.report = null;
+    state.runForm = null;
     state.catalog = { activities: [], machines: [], directories: [] };
     state.job = null;
     state.events = [];
@@ -541,6 +1075,7 @@
     $("empty-state").hidden = false;
     $("error-box").hidden = true;
     $("completion-box").hidden = true;
+    if ($("report-storage-warning")) $("report-storage-warning").hidden = true;
     document.title = "Proto Builder · 协议构建工作台";
     $("download-report").hidden = true;
     $("command-text").textContent = "";
@@ -638,10 +1173,119 @@
     svn: "SVN",
     update: "Update",
   };
+  async function recoverStart(previousJob, input, action) {
+    while (!state.stopped && !state.disposed) {
+      $("phase-text").textContent = localized(
+        "正在确认启动状态…",
+        "Confirming task status…",
+      );
+      $("connection").textContent = localized(
+        "正在确认任务，请勿重复提交",
+        "Confirming task; do not resubmit",
+      );
+      try {
+        const current = await api("/api/state");
+        if (state.stopped || state.disposed) return null;
+        if (
+          !current.last_job ||
+          current.last_job === previousJob ||
+          !samePath(current.root, input.root)
+        )
+          return null;
+        const candidate = await api(
+          `/api/jobs/${encodeURIComponent(current.last_job)}`,
+        );
+        if (state.stopped || state.disposed) return null;
+        if (
+          candidate.command !== action ||
+          !candidate.form ||
+          fingerprint(candidate.form) !== fingerprint(input)
+        )
+          return null;
+        notice(
+          localized(
+            "启动响应中断，已找到匹配任务并恢复结果。",
+            "The start response was interrupted. A matching task was found and its status recovered.",
+          ),
+        );
+        return { id: current.last_job, command: "" };
+      } catch (error) {
+        if (state.stopped || state.disposed) return null;
+        notice(
+          localized(
+            "暂时无法确认任务是否已启动。正在重连，操作保持锁定；不会重复提交。",
+            "Task startup cannot yet be confirmed. Reconnecting with controls locked; the request will not be resubmitted.",
+          ),
+          true,
+        );
+        await new Promise((resolve) => {
+          const finish = () => {
+            clearTimeout(timer);
+            lifetime.signal.removeEventListener("abort", finish);
+            resolve();
+          };
+          const timer = setTimeout(finish, 2000);
+          lifetime.signal.addEventListener("abort", finish, { once: true });
+          if (lifetime.signal.aborted) finish();
+        });
+      }
+    }
+    return null;
+  }
   async function start(action) {
     notice("");
+    if (state.busy || state.starting) return;
+    const pending = pendingInputs();
+    if (pending.length) {
+      renderCurrent();
+      const input = $(`${pending[0]}-search`);
+      input.focus();
+      notice(
+        localized(
+          "搜索内容尚未加入范围，请先添加、勾选或清空搜索后再执行。",
+          "Search text is not part of the selection. Add, select, or clear it before running.",
+        ),
+        true,
+      );
+      return;
+    }
     const input = form();
-    const job = await api("/api/jobs", { action, form: input });
+    let previousJob = state.job;
+    state.starting = true;
+    setBusy(true);
+    $("phase-text").textContent = localized("正在启动…", "Starting…");
+    $("run-state").dataset.state = "running";
+    $("status-text").textContent = localized("正在启动", "Starting");
+    let job;
+    let submitted = false;
+    try {
+      // Read a fresh checkpoint so an older completed task cannot be mistaken
+      // for this request when its response is lost.
+      const checkpoint = await api("/api/state");
+      if (state.stopped || state.disposed) return;
+      previousJob = checkpoint.last_job;
+      submitted = true;
+      job = await api("/api/jobs", { action, form: input });
+    } catch (error) {
+      if (submitted && error.uncertainResponse)
+        job = await recoverStart(previousJob, input, action);
+      if (state.stopped || state.disposed) return;
+      if (!job) {
+        setBusy(false);
+        $("connection").textContent = error.uncertainResponse
+          ? localized("连接不可用", "Connection unavailable")
+          : t("本地已连接");
+        $("run-state").dataset.state = "failed";
+        $("status-text").textContent = localized(
+          "启动未确认",
+          "Start not confirmed",
+        );
+        throw error;
+      }
+    } finally {
+      state.starting = false;
+    }
+    state.runForm = structuredClone(input);
     state.job = job.id;
     state.events = [];
     state.eventCount = 0;
@@ -651,10 +1295,13 @@
     $("command-text").textContent = job.command;
     $("error-box").hidden = true;
     $("completion-box").hidden = true;
+    if ($("report-storage-warning")) $("report-storage-warning").hidden = true;
     document.title = "Proto Builder · 协议构建工作台";
     $("empty-state").hidden = false;
     $("result-content").hidden = true;
     $("download-report").hidden = true;
+    $("result-actions").hidden = true;
+    renderCurrent();
     $("progress").removeAttribute("value");
     $("logs").replaceChildren();
     $("log-count").textContent = "0";
@@ -665,15 +1312,16 @@
     await poll(job.id);
   }
   async function poll(id) {
-    if (state.stopped || state.job !== id) return;
+    if (state.stopped || state.disposed || state.job !== id) return;
     try {
       const data = await api(
         `/api/jobs/${encodeURIComponent(id)}?after=${state.eventCount}`,
       );
-      if (state.stopped || state.job !== id) return;
+      if (state.stopped || state.disposed || state.job !== id) return;
       appendLogs(data.events || []);
       state.eventCount = data.event_count;
       state.report = data;
+      if (data.form) state.runForm = data.form;
       $("connection").textContent = t("本地已连接");
       $("log-count").textContent = number(state.eventCount);
       $("elapsed").textContent = `${Number(data.duration_seconds).toFixed(1)}s`;
@@ -695,14 +1343,17 @@
           tab("result");
           $("result-view").scrollTop = 0;
           $("completion-box").scrollIntoView({ block: "nearest" });
+        } else if (data.error) {
+          $("error-box").focus({ preventScroll: true });
+          $("error-box").scrollIntoView({ block: "nearest" });
         }
         if (data.status === "success" && data.command === "build") {
           const current = await api("/api/state");
           state.loaded.setup = current.setup;
           renderSetup();
+          $("project-paths").open = Boolean(current.setup?.needs_confirmation);
           loadCatalog();
         }
-        if (data.report_error) notice(data.report_error, true);
       } else {
         setBusy(true);
         setTimeout(() => poll(id), 450);
@@ -714,7 +1365,8 @@
         "Disconnected; retrying",
       );
       // Keep controls locked until the outcome is known; a failed HTTP request does not stop a build.
-      if (!state.stopped && state.job === id) setTimeout(() => poll(id), 2000);
+      if (!state.stopped && !state.disposed && state.job === id)
+        setTimeout(() => poll(id), 2000);
     }
   }
   function logNode(event) {
@@ -747,6 +1399,67 @@
     el.append(node("strong", number(value)), node("span", t(label)));
     return el;
   }
+  function renderReportStorage(report) {
+    let warning = $("report-storage-warning");
+    if (!warning && !report.report_error) return;
+    if (!warning) {
+      warning = node("div", undefined, "notice");
+      warning.id = "report-storage-warning";
+      warning.setAttribute("role", "alert");
+      $("completion-box").before(warning);
+    }
+    warning.hidden = !report.report_error;
+    if (!report.report_error) return;
+    const states = {
+      committed: [
+        "生成物已写回。报告保存失败不会撤销编译结果，无需因此重新编译。",
+        "Generated outputs were committed. Report storage failure does not undo the build; rebuilding is not required for this warning.",
+      ],
+      not_written: [
+        "生成物未写回。请同时查看本次操作结果或原始错误。",
+        "Generated outputs were not written. Also review the operation result or original error.",
+      ],
+      rolled_back: [
+        "本次写回已回滚。请保留当前结果并查看原始错误。",
+        "This output transaction was rolled back. Keep the current result and review the original error.",
+      ],
+      recovered: [
+        "已恢复上次未完成的事务；请结合本次结果核对文件状态。",
+        "A previous incomplete transaction was recovered. Check file state against this operation's result.",
+      ],
+      recovery_required: [
+        "文件状态尚需恢复检查。请保留备份，勿直接重复覆盖。",
+        "File state requires recovery checks. Preserve backups and do not blindly repeat replacement.",
+      ],
+    };
+    const output = states[
+      report.output_state ?? report.result?.output_state
+    ] || [
+      "写回状态未确认，请核对当前结果和文件后再决定是否重试。",
+      "Output state is not confirmed. Review the current result and files before deciding whether to retry.",
+    ];
+    const details = node("details");
+    details.append(
+      node("summary", t("技术详情")),
+      node("p", report.report_error, "mono"),
+    );
+    warning.replaceChildren(
+      node("strong", localized("报告保存失败", "Report storage failed")),
+      node("p", localized(...output)),
+      node(
+        "p",
+        localized(
+          "可先下载当前报告，再检查日志目录的权限与可用空间。",
+          "Download the current report, then check log-directory permissions and free space.",
+        ),
+      ),
+      actionButton(
+        localized("下载当前报告", "Download current report"),
+        downloadReport,
+      ),
+      details,
+    );
+  }
   function renderReport(report) {
     const cancelled = report.exit_code === 130;
     $("run-state").dataset.state = report.finished
@@ -768,6 +1481,9 @@
       cancelled ? "操作已取消" : "本次操作已中止",
     );
     $("error-message").textContent = report.error || "";
+    renderFailure(report);
+    renderResultActions(report);
+    renderReportStorage(report);
     $("diagnostics").replaceChildren(
       ...(report.diagnostics || []).map((diagnostic) => {
         const el = node("div", undefined, "diagnostic"),
@@ -813,6 +1529,7 @@
     $("empty-state").hidden = Boolean(result);
     $("result-content").hidden = !result;
     $("unchanged-label").hidden = !result?.changes;
+    renderCurrent();
     if (!result) return;
     const metrics = $("metrics");
     if (report.command === "plan") {
@@ -898,21 +1615,59 @@
         removed: "删除文件",
         unchanged: "未变文件",
       };
+      const sections = new Map();
+      const normalized = (value) =>
+        String(value || "")
+          .replaceAll("\\", "/")
+          .replace(/\/+$/, "");
       for (const key of [
         "added",
         "modified",
         "removed",
         ...($("show-unchanged").checked ? ["unchanged"] : []),
       ]) {
-        for (const path of result.changes[key])
-          if (matches(path)) {
-            const el = node("div", undefined, `file-row ${key}`);
-            el.append(
-              node("span", t(labels[key]), "file-kind"),
-              node("span", path, "file-path"),
-            );
-            rows.push(el);
+        for (const path of result.changes[key]) {
+          if (!matches(path)) continue;
+          const locations = report.locations || {},
+            full = normalized(path);
+          let category = localized("其他生成物", "Other outputs"),
+            display = path;
+          for (const [location, zh, en] of [
+            ["server", "业务服", "Server"],
+            ["calc", "计算服", "Calculation server"],
+            ["project", "协议项目", "Protocol project"],
+          ]) {
+            const base = normalized(locations[location]);
+            if (
+              base &&
+              full.toLowerCase().startsWith(base.toLowerCase() + "/")
+            ) {
+              category = localized(zh, en);
+              display = full.slice(base.length + 1);
+              break;
+            }
           }
+          if (/\.(html|md)$/i.test(path))
+            category = localized("共享文档", "Shared documentation");
+          const el = node("div", undefined, `file-row ${key}`),
+            name = node("span", display, "file-path");
+          name.title = path;
+          el.append(
+            node("span", t(labels[key]), "file-kind"),
+            name,
+            actionButton(localized("复制路径", "Copy path"), () =>
+              copy(path, "路径已复制"),
+            ),
+          );
+          if (!sections.has(category)) sections.set(category, []);
+          sections.get(category).push(el);
+        }
+      }
+      for (const [category, items] of sections) {
+        rows.push(
+          node("h3", `${category} · ${items.length}`, "result-group-title"),
+          ...items,
+        );
       }
     } else if (result.checks) {
       const names = {
@@ -921,6 +1676,8 @@
         inputs: "输入协议",
         "output-permissions": "输出权限",
         svn: "SVN",
+        "output-roots": localized("输出目录范围", "Output scope"),
+        "output-layout": localized("输出目录布局", "Output directory layout"),
       };
       rows = result.checks
         .filter((check) => matches(JSON.stringify(check)))
@@ -929,9 +1686,17 @@
           el.append(
             node(
               "strong",
-              `${t(names[check.check] || check.check)} · ${t("已通过")}`,
+              `${t(names[check.check] || check.check)} · ${t(check.passed ? "已通过" : "失败")}`,
             ),
-            node("pre", JSON.stringify(check, null, 2)),
+            (() => {
+              const details = node("details"),
+                summary = node("summary", t("技术详情"));
+              details.append(
+                summary,
+                node("pre", JSON.stringify(check, null, 2)),
+              );
+              return details;
+            })(),
           );
           return el;
         });
@@ -980,7 +1745,9 @@
     try {
       const saved = await api("/api/config/save", state.save);
       $("save-dialog").close();
+      state.savedFingerprint = fingerprint(state.save.form);
       notice(`${t("配置已保存")} · ${saved.path}`);
+      renderCurrent();
     } finally {
       $("confirm-save").disabled = false;
     }
@@ -1007,6 +1774,7 @@
     const running = state.busy;
     await api("/api/shutdown", {});
     state.stopped = true;
+    lifetime.abort();
     setBusy(false);
     $("shutdown-dialog").close();
     $("connection").textContent = t("服务已关闭");
@@ -1027,25 +1795,42 @@
   $("settings-form").addEventListener("submit", (event) =>
     event.preventDefault(),
   );
+  window.addEventListener("pagehide", () => {
+    state.disposed = true;
+    lifetime.abort();
+  });
+  window.addEventListener("pageshow", (event) => {
+    if (event.persisted && state.disposed) location.reload();
+  });
   for (const id of ["plan", "build", "doctor"])
     $(id).addEventListener(
       "click",
       attempt(() => start(id)),
     );
-  $("open-project").addEventListener("click", attempt(openProject));
+  $("open-project").addEventListener(
+    "click",
+    attempt(() => openProject()),
+  );
   $("root").addEventListener("keydown", (event) => {
-    if (event.key === "Enter") attempt(openProject)(event);
+    if (event.key === "Enter") attempt(() => openProject())(event);
   });
   $("proto-path").addEventListener("change", () => {
     if (!state.busy) loadCatalog();
   });
   for (const kind of ["activity", "machine"]) {
-    $(`${kind}-search`).addEventListener("input", () =>
+    $(`${kind}-search`).addEventListener("input", () => {
       renderPicker(
         kind,
         state.catalog[kind === "activity" ? "activities" : "machines"],
-      ),
-    );
+      );
+      renderCurrent();
+    });
+    $(`add-${kind}`).addEventListener("click", () => addIDs(kind));
+    $(`clear-${kind}-search`).addEventListener("click", () => {
+      $(`${kind}-search`).value = "";
+      notice("");
+      renderPickers();
+    });
     $(`${kind}-search`).addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
         event.preventDefault();
@@ -1061,7 +1846,35 @@
     }
   });
   $("add-exclude").addEventListener("click", addExclude);
+  $("clear-exclude-search").addEventListener("click", () => {
+    $("exclude-search").value = "";
+    notice("");
+    renderPickers();
+  });
+  for (const event of ["input", "change"])
+    $("settings-form").addEventListener(event, renderCurrent);
+  $("keep-project").addEventListener("click", () => {
+    $("root").value = state.loaded.root;
+    state.pendingProject = null;
+    $("project-dialog").close();
+    renderCurrent();
+  });
+  $("discard-project").addEventListener(
+    "click",
+    attempt(async () => {
+      $("root").value = state.pendingProject;
+      $("project-dialog").close();
+      await openProject(true);
+      state.pendingProject = null;
+    }),
+  );
+  $("project-dialog").addEventListener("cancel", () => {
+    $("root").value = state.loaded.root;
+    state.pendingProject = null;
+    renderCurrent();
+  });
   $("clear-filters").addEventListener("click", () => {
+    notice("");
     for (const key of ["activity", "machine", "exclude"]) {
       state[key].clear();
       $(`${key}-search`).value = "";
@@ -1115,6 +1928,7 @@
       $("folder-dialog").close();
       if (state.folderTarget === "root") await openProject();
       else if (state.folderTarget === "proto-path") await loadCatalog();
+      renderCurrent();
     }),
   );
   $("result-tab").addEventListener("click", () => tab("result"));

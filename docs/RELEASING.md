@@ -47,6 +47,21 @@ cargo run --locked --bin release -- pack --binary target/release/proto-builder.e
 
 另外提供 README、配置示例、包含 docs/ 的文档压缩包和带提交标识及 SHA256 的源码快照；完整说明和第三方许可位于 docs/，许可文本也已内置 EXE。打包过程不调用旧协议脚本，内部基准不进入包。
 
+### 1.3.0-dev.1 预发布打包
+
+检出本次发布源码，确认 Cargo.toml / Cargo.lock 的产品版本为 `1.3.0-dev.1`，完成上述检查及优化构建。维护者为每次打包选择新的空目录，例如：
+
+```powershell
+$releaseOutput = Join-Path $PWD ('dist/publish-v1.3.0-dev.1-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+cargo run --locked --bin release -- pack --binary target/release/proto-builder.exe --key "$env:LOCALAPPDATA\ProtoBuilder\release-keys\official\signing-key.dpapi" --output $releaseOutput --version 1.3.0-dev.1 --channel beta
+```
+
+这会生成 `proto-builder-1.3.0-dev.1-windows-x86_64.exe` 及对应签名资源，清单渠道为 `beta`。不要直接复用已有本地开发包目录，也不要覆盖已签名或已发布的附件。补充文档和源码附件后，重新生成覆盖全部附件的 SHA256SUMS；签名清单及其签名字节保持原样。
+
+创建 `v1.3.0-dev.1` 标签和 GitHub Release 时标记 **prerelease**，保留 v1.2.0 为 Latest stable。版本说明使用 [RELEASE-1.3.0-dev.1.md](RELEASE-1.3.0-dev.1.md)，明确旧 `--agent` 接口已删除。默认 stable 更新不会选择本预发布版；用户主动安装对应 EXE，或执行 `self-update apply --channel beta` 选择最新预发布更新。
+
+发布后核对远程标签对应的提交、下载附件的大小和哈希，并从匿名下载的原始清单验证签名。线上升级和回退的实测结果应单独记录；本地构建、签名或 MCP 子进程测试不能代替这些结果。
+
 ## 正式发布
 
 本地打包不自动向 GitHub 写入。确认候选版本后，在 `dongrv/proto-builder` 创建与版本一致的 `v1.2.0` Release，将上述原始文件作为附件发布，并填写变更说明。**不要重新格式化 release.json、改变换行或替换同版本附件**，否则签名或哈希会失效。修复必须发布新版本。beta 使用 `1.3.0-beta.1` 等 SemVer，并将 GitHub Release 标记为 prerelease，清单渠道使用 beta。

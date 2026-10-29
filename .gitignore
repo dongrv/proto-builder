@@ -1,5 +1,6 @@
 /target/
 /dist/
+/build/
 *.dpapi
 *.key
 *private-key*
