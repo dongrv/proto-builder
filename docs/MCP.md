@@ -1,6 +1,6 @@
 # MCP：连接 Codex 与其他 Agent
 
-`1.3.0-dev.1` 预发布版内置 MCP stdio 服务，由同一个 EXE 提供，无需 Node、Python、BAT、额外服务或端口。普通 CLI 和网页保留；机器接口统一使用 Agent API v2，旧 `--agent` 已删除。不支持 MCP 的 Agent 可以使用 [JSON 请求](AGENT-REQUESTS.md)。请从 [v1.3.0-dev.1 Release](https://github.com/dongrv/proto-builder/releases/tag/v1.3.0-dev.1) 下载对应 EXE；稳定版 v1.2.0 不提供本页的新接口。
+`1.3.0` 正式版内置 MCP stdio 服务，由同一个 EXE 提供，无需 Node、Python、BAT、额外服务或端口。普通 CLI 和网页保留；机器接口统一使用 Agent API v2，旧 `--agent` 已删除。不支持 MCP 的 Agent 可以使用 [JSON 请求](AGENT-REQUESTS.md)。请从 [v1.3.0 Release](https://github.com/dongrv/proto-builder/releases/tag/v1.3.0) 下载对应 EXE；稳定版 v1.2.0 不提供本页的新接口。
 
 ## Codex 配置
 
@@ -71,7 +71,7 @@ MCP 工具 arguments 直接对应 JSON 请求中的 `params` 对象，按工具�
 
 ## 兼容边界与验证
 
-Agent v2 是本预发布版的破坏性接口调整；客户端应重新读取 tools/list，按新的 inputSchema 和 outputSchema 调用，不缓存旧参数定义。普通 CLI 的 `--json` 和持久报告继续使用内部完整报告 v1，MCP 工具输出使用 Agent v2，两个版本号独立。
+Agent v2 是本正式版的破坏性接口调整；客户端应重新读取 tools/list，按新的 inputSchema 和 outputSchema 调用，不缓存旧参数定义。普通 CLI 的 `--json` 和持久报告继续使用内部完整报告 v1，MCP 工具输出使用 Agent v2，两个版本号独立。
 
 84 项 Rust 测试及 58 个独立 EXE 验收场景通过，覆盖 JSON 请求/普通 CLI 构建字节一致、空数组和 false 覆盖、严格参数拒绝、写回保护、报告分页，以及 MCP 三版本协商、工具发现、关联 ID、忙状态、取消、EOF 收尾和报告保存失败后的真实写回状态。MCP stdio 冒烟验证了初始化、8 个工具发现、调用和共用 Schema。检查结果见 [验收记录](VALIDATION.md)。
 

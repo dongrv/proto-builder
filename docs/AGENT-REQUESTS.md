@@ -1,6 +1,6 @@
 # Agent JSON 请求 v2
 
-预发布版 `1.3.0-dev.1` 的机器接口独立于人类命令行参数。`agent capabilities` 返回实际支持的操作、请求和响应 Schema、限制与副作用；以运行中的 EXE 为准。
+正式版 `1.3.0` 的机器接口独立于人类命令行参数。`agent capabilities` 返回实际支持的操作、请求和响应 Schema、限制与副作用；以运行中的 EXE 为准。
 
 ```powershell
 proto-builder agent capabilities

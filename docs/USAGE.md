@@ -1,6 +1,6 @@
 # 使用与配置详解
 
-本文随源码更新。新交互功能及 Agent API v2 随 [v1.3.0-dev.1 预发布版](https://github.com/dongrv/proto-builder/releases/tag/v1.3.0-dev.1) 提供；稳定版仍为 v1.2.0。
+本文随源码更新。新交互功能及 Agent API v2 随 [v1.3.0 正式版](https://github.com/dongrv/proto-builder/releases/tag/v1.3.0) 提供；稳定版仍为 v1.2.0。
 
 当前 SVN 项目的 protobuf → Go 开发工具。日常只需一个 Windows x86_64 的 `proto-builder.exe`，以及可选的 TOML 配置。无 BAT、Python、Go、Rust 运行环境依赖。固定版本的 protoc 和 Go、gRPC、文档插件已压缩内置，首次使用自动解压到用户缓存，每次运行验证 SHA256。
 
@@ -18,7 +18,7 @@
 
 默认安装到 `%LOCALAPPDATA%\ProtoBuilder\bin` 并注册用户 PATH；新开终端即可使用。也可直接运行下载的程序，或用 `install --dir D:\DevTools\ProtoBuilder` 自选安装目录。`install --system` 使用 Program Files 和系统 PATH，需要管理员终端。
 
-安装本页的新交互功能和 Agent API v2 时，改为执行 `proto-builder-1.3.0-dev.1-windows-x86_64.exe install`。这是预发布版；升级前请按 [版本说明](RELEASE-1.3.0-dev.1.md) 迁移原 `--agent` 调用。
+安装本页的新交互功能和 Agent API v2 时，改为执行 `proto-builder-1.3.0-windows-x86_64.exe install`。这是正式版；升级前请按 [版本说明](RELEASE-1.3.0.md) 迁移原 `--agent` 调用。
 
 在项目根目录执行：
 
@@ -101,7 +101,7 @@ proto-builder --help
 
 ## Codex / Agent 调用
 
-`1.3.0-dev.1` 预发布版的机器接口使用 Agent API v2：
+`1.3.0` 正式版的机器接口使用 Agent API v2：
 
 ```powershell
 proto-builder agent capabilities
